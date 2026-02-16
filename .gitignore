@@ -1,3 +1,11 @@
 .env
 venv/
 .claude/
+.git
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+tests
+venv
+README.md

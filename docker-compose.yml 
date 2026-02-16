@@ -1,0 +1,9 @@
+services:
+  voice-agent:
+    image: gcr.io/YOUR_PROJECT/voice-agent:latest
+    container_name: voice-agent
+    ports:
+      - "8319:8319"
+    restart: always
+    environment:
+      - ENV=production
