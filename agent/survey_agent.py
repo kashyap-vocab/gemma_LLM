@@ -1,8 +1,18 @@
-from livekit.agents import Agent
+import asyncio
+from livekit.agents import Agent, function_tool
+from db_storage import feedback_sessions, _default_feedback_session, persist_feedback_to_db
 
 
 class SurveyAssistant(Agent):
-    def __init__(self) -> None:
+    def __init__(self, call_id: str = None, customer_name: str = None) -> None:
+        self._call_id = call_id
+        self._customer_name = customer_name
+        
+        # Build instructions with customer name hint if available
+        name_hint = ""
+        if customer_name:
+            name_hint = f"\n\nग्राहक का नाम: {customer_name} है। शुरुआत में सिर्फ एक बार \"{customer_name} जी\" बोल कर सम्बोधित करो, फिर नाम दोबारा मत लो, सिर्फ \"आप\" बोलो।"
+        
         super().__init__(
             instructions="""
 You are an intelligent AI voice assistant acting as an experienced, empathetic FEMALE customer service representative from एल एंड टी फाइनेंस, calling customers for payment feedback.
@@ -219,5 +229,76 @@ Never repeat customer statements.
 Never use English script.
 
 Never argue or pressure.
-            """,
+
+When you learn or confirm any of the above information, store it using the provided tools: store_identity_confirmed, store_loan_taken, store_last_month_payment, add_payment_detail, and complete_survey when the customer confirms the summary.
+            """ + name_hint,
         )
+
+    @function_tool()
+    async def store_identity_confirmed(self, status: str) -> None:
+        """
+        Store identity confirmation status. Call when customer confirms or denies identity.
+        Args:
+            status: YES (customer confirmed) / NO (wrong person) / NOT_AVAILABLE (relative answered) / SENSITIVE_SITUATION
+        """
+        if not self._call_id:
+            return
+        feedback_sessions.setdefault(self._call_id, _default_feedback_session(self._call_id))["identity_confirmed"] = status
+        asyncio.create_task(persist_feedback_to_db(self._call_id))
+
+    @function_tool()
+    async def store_loan_taken(self, has_loan: bool) -> None:
+        """
+        Store whether customer has taken a loan from एल एंड टी फाइनेंस.
+        Args:
+            has_loan: True if customer has loan, False otherwise
+        """
+        if not self._call_id:
+            return
+        feedback_sessions.setdefault(self._call_id, _default_feedback_session(self._call_id))["loan_taken"] = has_loan
+        asyncio.create_task(persist_feedback_to_db(self._call_id))
+
+    @function_tool()
+    async def store_last_month_payment(self, value: str) -> None:
+        """
+        Store last month payment status or note (e.g. paid, not paid, partial).
+        Args:
+            value: What the customer said about last month payment
+        """
+        if not self._call_id:
+            return
+        feedback_sessions.setdefault(self._call_id, _default_feedback_session(self._call_id))["last_month_payment"] = value
+        asyncio.create_task(persist_feedback_to_db(self._call_id))
+
+    @function_tool()
+    async def add_payment_detail(self, field: str, value: str) -> None:
+        """
+        Add one payment detail or customer name. Call after the customer provides each piece of information.
+        Args:
+            field: One of amount, date, mode, reason, payee, payee_name, payee_contact, payment_date, payment_mode, payment_reason, payment_amount, field_executive_name, field_executive_contact, customer_name
+            value: The value for that field
+        """
+        if not self._call_id:
+            return
+        sid = self._call_id
+        feedback_sessions.setdefault(sid, _default_feedback_session(sid))
+        if field == "customer_name":
+            feedback_sessions[sid]["customer_name"] = value
+        else:
+            if "payment" not in feedback_sessions[sid]:
+                feedback_sessions[sid]["payment"] = {}
+            feedback_sessions[sid]["payment"][field] = value
+        asyncio.create_task(persist_feedback_to_db(self._call_id))
+
+    @function_tool()
+    async def complete_survey(self, confirmed: bool) -> None:
+        """
+        Call when customer confirms or rejects the summary. End the call after thanking if confirmed.
+        Args:
+            confirmed: True if customer said the summary is correct, False if they want to correct
+        """
+        if not self._call_id:
+            return
+        feedback_sessions.setdefault(self._call_id, _default_feedback_session(self._call_id))["confirmed"] = confirmed
+        feedback_sessions[self._call_id]["category"] = "COMPLETE_SURVEY"
+        asyncio.create_task(persist_feedback_to_db(self._call_id))

@@ -1,3 +1,4 @@
+import asyncio
 import wave
 from pathlib import Path
 
@@ -7,6 +8,7 @@ from livekit import agents, rtc
 from livekit.agents import (
     AgentSession,
     MetricsCollectedEvent,
+    ConversationItemAddedEvent,
     room_io,
 )
 from livekit.plugins import deepgram, google, noise_cancellation, silero
@@ -17,6 +19,15 @@ from metrics import MetricsTracker
 from survey_agent import SurveyAssistant
 
 load_dotenv()
+
+# Import database storage helpers
+from db_storage import (
+    _load_call_metadata as load_call_metadata,
+    store_conversation_turn,
+    persist_feedback_to_db,
+    feedback_sessions,
+    _default_feedback_session,
+)
 
 
 # ============================================================================
@@ -62,8 +73,19 @@ async def my_agent(ctx: agents.JobContext):
     tracker = MetricsTracker()
     tracker.start_turn()
 
+    call_id = ctx.room.name or "unknown"
+    customer_phone, customer_name = load_call_metadata(call_id)
+    
+    # Initialize feedback session
+    feedback_sessions[call_id] = _default_feedback_session(call_id)
+    if customer_name:
+        feedback_sessions[call_id]["customer_name"] = customer_name
+
     print(f"\n🎯 SESSION START")
-    print(f"Room: {ctx.room.name}\n")
+    print(f"Room: {call_id}")
+    if customer_name:
+        print(f"Customer: {customer_name} ({customer_phone})")
+    print()
 
     # Use prewarmed models
     session = AgentSession(
@@ -77,15 +99,44 @@ async def my_agent(ctx: agents.JobContext):
         preemptive_generation=True,
     )
 
+    # Store conversation transcripts
+    @session.on("conversation_item_added")
+    async def on_conversation_item_added(event: ConversationItemAddedEvent):
+        item = event.item
+        text = (item.text_content or "").strip()
+        if not text:
+            return
+        role = getattr(item, "role", None)
+        role_str = (getattr(role, "value", None) or getattr(role, "name", None) or str(role)).lower()
+        if role_str == "user":
+            asyncio.create_task(store_conversation_turn(
+                call_id,
+                customer_phone,
+                customer_transcript=text,
+                speaker_id=getattr(item, "speaker_id", None),
+            ))
+        elif role_str == "assistant":
+            asyncio.create_task(store_conversation_turn(
+                call_id,
+                customer_phone,
+                agent_transcript=text,
+            ))
+
     # Subscribe to official LiveKit metrics
     @session.on("metrics_collected")
     def on_metrics_collected(ev: MetricsCollectedEvent):
         tracker.on_metrics(ev)
 
+    @session.on("close")
+    async def on_close(_event):
+        """Persist feedback data on session end."""
+        await persist_feedback_to_db(call_id, customer_phone)
+        feedback_sessions.pop(call_id, None)
+
     try:
         await session.start(
             room=ctx.room,
-            agent=SurveyAssistant(),
+            agent=SurveyAssistant(call_id=call_id, customer_name=customer_name),
             room_options=room_io.RoomOptions(
                 audio_input=room_io.AudioInputOptions(
                     noise_cancellation=lambda params: (

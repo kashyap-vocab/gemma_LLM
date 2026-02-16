@@ -1,4 +1,5 @@
 fastapi~=0.128.7
+python-multipart
 python-dotenv
 livekit
 livekit-agents[silero,turn-detector]~=1.3
@@ -8,5 +9,9 @@ livekit-plugins-google
 livekit-plugins-silero
 livekit-plugins-noise-cancellation~=0.2
 livekit-plugins-turn-detector
-audioop-lts
 livekit-plugins-sarvam
+audioop-lts; python_version >= "3.13"
+pandas
+openpyxl
+psycopg2-binary
+sqlalchemy>=2.0.0
