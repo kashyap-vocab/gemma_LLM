@@ -1,16 +1,149 @@
 import os
+import logging
+import time
 import wave
 from pathlib import Path
 
 from dotenv import load_dotenv
 from livekit import agents, rtc
-from livekit.agents import AgentServer, AgentSession, Agent, room_io
+from livekit.agents import (
+    AgentServer,
+    AgentSession,
+    Agent,
+    room_io,
+    UserInputTranscribedEvent,
+    MetricsCollectedEvent,
+)
+from livekit.agents.metrics import (
+    AgentMetrics,
+    LLMMetrics,
+    STTMetrics,
+    TTSMetrics,
+    EOUMetrics,
+)
 from livekit.plugins import deepgram, google, noise_cancellation, silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 from google.genai import types
 from livekit.plugins import sarvam
 
 load_dotenv()
+
+logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO)
+
+
+# ---- Metrics: same as livkit_agent.py ----
+class ConversationLogger:
+    """
+    Logs transcripts and latency metrics to the standard Python logger.
+    """
+
+    def __init__(self) -> None:
+        self._per_speech: dict[str, dict[str, dict]] = {}
+
+    def log_user_transcript(self, event: UserInputTranscribedEvent) -> None:
+        logger.info(
+            "user_transcript language=%s speaker=%s text=%s",
+            event.language,
+            event.speaker_id,
+            event.transcript,
+        )
+
+    def log_metrics(self, metrics: AgentMetrics) -> None:
+        component = None
+        latencies = {}
+
+        if isinstance(metrics, LLMMetrics):
+            component = "llm"
+            latencies = {
+                "duration_ms": metrics.duration * 1000.0,
+                "ttft_ms": metrics.ttft * 1000.0,
+                "tokens_per_second": metrics.tokens_per_second,
+            }
+        elif isinstance(metrics, TTSMetrics):
+            component = "tts"
+            latencies = {
+                "duration_ms": metrics.duration * 1000.0,
+                "ttfb_ms": metrics.ttfb * 1000.0,
+                "audio_duration_ms": metrics.audio_duration * 1000.0,
+            }
+        elif isinstance(metrics, STTMetrics):
+            component = "stt"
+            latencies = {
+                "duration_ms": metrics.duration * 1000.0,
+                "audio_duration_ms": metrics.audio_duration * 1000.0,
+                "streamed": metrics.streamed,
+            }
+        elif isinstance(metrics, EOUMetrics):
+            eou_ms = metrics.end_of_utterance_delay * 1000.0
+            stt_delay_ms = metrics.transcription_delay * 1000.0
+            callback_ms = metrics.on_user_turn_completed_delay * 1000.0
+            component = "eou"
+            latencies = {
+                "end_of_utterance_delay_ms": eou_ms,
+                "transcription_delay_ms": stt_delay_ms,
+                "on_user_turn_completed_delay_ms": callback_ms,
+                "stt_total_latency_ms": eou_ms + stt_delay_ms,
+            }
+
+        if component:
+            primary_ms = (
+                latencies.get("stt_total_latency_ms")
+                or latencies.get("duration_ms")
+                or latencies.get("ttfb_ms")
+            )
+            logger.info(
+                "metrics_component=%s latency_ms=%s latencies=%s",
+                component,
+                primary_ms,
+                latencies,
+            )
+            self._update_latency_matrix(component, metrics, latencies)
+
+    def _update_latency_matrix(
+        self,
+        component: str,
+        metrics: AgentMetrics,
+        latencies: dict,
+    ) -> None:
+        speech_id = getattr(metrics, "speech_id", None)
+        if not speech_id:
+            return
+
+        speech_row = self._per_speech.setdefault(speech_id, {})
+        speech_row[component] = latencies
+
+        eou = speech_row.get("eou") or {}
+        llm = speech_row.get("llm") or {}
+        tts = speech_row.get("tts") or {}
+
+        stt_total = eou.get("stt_total_latency_ms")
+        llm_ms = llm.get("duration_ms")
+        tts_ms = tts.get("duration_ms")
+        tts_ttfb_ms = tts.get("ttfb_ms")
+
+        if stt_total is None or llm_ms is None or tts_ms is None:
+            return
+
+        total_ms = stt_total + llm_ms + tts_ms
+
+        logger.info(
+            "latency_matrix speech_id=%s stt_total_ms=%.1f llm_ms=%.1f tts_ms=%.1f tts_ttfb_ms=%s total_ms=%.1f",
+            speech_id,
+            stt_total,
+            llm_ms,
+            tts_ms,
+            tts_ttfb_ms,
+            total_ms,
+        )
+        logger.info(
+            "component_latencies STT_ms=%.1f LLM_ms=%.1f TTS_ms=%.1f TTS_TTFB_ms=%s total_ms=%.1f",
+            stt_total,
+            llm_ms,
+            tts_ms,
+            tts_ttfb_ms,
+            total_ms,
+        )
 
 
 class Assistant(Agent):
@@ -26,11 +159,11 @@ Behave like a real human agent, not a script.
 
 ALL spoken responses MUST be in देवनागरी script only (even English words).
 
-Always refer to the company as “एल एंड टी फाइनेंस”.
+Always refer to the company as "एल एंड टी फाइनेंस".
 
 Always use feminine grammar for yourself (कर रही हूँ, समझ गई हूँ).
 
-Address the customer respectfully using “आप” only.
+Address the customer respectfully using "आप" only.
 
 Tone must be natural, polite, empathetic, and conversational.
 
@@ -55,7 +188,7 @@ If identity is not yet confirmed, ask ONLY for identity confirmation.
 
 Do not ask anything else before this.
 
-If the customer’s response already confirms identity, mark it mentally.
+If the customer's response already confirms identity, mark it mentally.
 
 Possible internal values:
 
@@ -67,7 +200,7 @@ Ask about loan ONLY after identity is confirmed.
 
 3️⃣ Last Month Payment (THIRD PRIORITY)
 
-Ask about last month’s payment ONLY after loan is confirmed.
+Ask about last month's payment ONLY after loan is confirmed.
 
 4️⃣ Remaining Questions (Flexible)
 
@@ -105,26 +238,26 @@ Default year = current year (2026).
 
 Never assume past years unless explicitly stated.
 
-Resolve phrases like “पिछले महीने” using today’s date as reference.
+Resolve phrases like "पिछले महीने" using today's date as reference.
 Always return the date in dd-mm-yyyy format.
 
 🗣️ CONVERSATION RULES (VERY IMPORTANT)
 ✔ Acknowledgments
 
 Use ONLY 1–2 word acknowledgments when needed
-Examples: “ठीक है”, “समझ गई”, “जी”
+Examples: "ठीक है", "समझ गई", "जी"
 
 NEVER repeat or paraphrase what the customer just said.
 
 After acknowledgment → ask the next required question.
 
-Always write the abbreviation in Capital letters or in Devanagari. For example, say “EMI” instead of emi.
+Always write the abbreviation in Capital letters or in Devanagari. For example, say "EMI" instead of emi.
 
 ❌ Bad:
-“आपने कहा कि आपने 5000 रुपये दिए…”
+"आपने कहा कि आपने 5000 रुपये दिए…"
 
 ✅ Good:
-“ठीक है, किस तारीख को भुगतान किया था?”
+"ठीक है, किस तारीख को भुगतान किया था?"
 
 ✔ Question Discipline
 
@@ -140,7 +273,7 @@ If corrected, update mentally and move on gracefully.
 
 Use customer name ONLY once in the first greeting.
 
-After identity confirmation → NEVER use the name again, only “आप”.
+After identity confirmation → NEVER use the name again, only "आप".
 
 Same rule for relatives.
 
@@ -199,13 +332,13 @@ Follow this order:
 किसे भुगतान किया गया (यदि फील्ड एग्ज़ीक्यूटिव)
 
 End with:
-“क्या यह जानकारी सही है?”
+"क्या यह जानकारी सही है?"
 
 ✏️ CORRECTIONS
 
-If customer says it’s wrong:
+If customer says it's wrong:
 
-Ask: “कौन सी जानकारी बदलनी है?”
+Ask: "कौन सी जानकारी बदलनी है?"
 
 Update mentally and repeat the full summary again.
 
@@ -216,7 +349,7 @@ Ask for confirmation again.
 If confirmed:
 
 Thank politely and close:
-“आपके मूल्यवान फ़ीडबैक और समय देने के लिए धन्यवाद। आपका दिन शुभ हो।”
+"आपके मूल्यवान फ़ीडबैक और समय देने के लिए धन्यवाद। आपका दिन शुभ हो।"
 
 End immediately for sensitive situations or refusal.
 
@@ -243,15 +376,12 @@ def prewarm(proc: agents.JobProcess):
     """Prewarm VAD, STT, LLM, and TTS models to reduce initial connection latency"""
     print("🔥 PREWARMING MODELS...")
 
-    # Prewarm VAD (Voice Activity Detection)
     proc.userdata["vad"] = silero.VAD.load()
     print("✅ VAD prewarmed")
 
-    # Prewarm STT (Speech-to-Text)
     proc.userdata["stt"] = deepgram.STT(model="nova-2", language="hi")
     print("✅ STT prewarmed")
 
-    # Prewarm LLM
     proc.userdata["llm"] = google.LLM(
         model="gemini-2.0-flash",
         temperature=0.1,
@@ -259,7 +389,6 @@ def prewarm(proc: agents.JobProcess):
     )
     print("✅ LLM prewarmed")
 
-    # Prewarm TTS (Text-to-Speech)
     proc.userdata["tts"] = sarvam.TTS(
         target_language_code="hi-IN",
         speaker="manisha",
@@ -278,7 +407,8 @@ server.setup_fnc = prewarm
 
 @server.rtc_session()
 async def my_agent(ctx: agents.JobContext):
-    # Use prewarmed models from userdata
+    conv_logger = ConversationLogger()
+
     session = AgentSession(
         min_endpointing_delay=0.1,
         max_endpointing_delay=0.4,
@@ -287,10 +417,19 @@ async def my_agent(ctx: agents.JobContext):
         tts=ctx.proc.userdata["tts"],
         vad=ctx.proc.userdata["vad"],
         turn_detection=MultilingualModel(),
-        preemptive_generation=True,  # Enable preemptive generation for lower latency
+        preemptive_generation=True,
     )
 
-    # Start the session
+    @session.on("user_input_transcribed")
+    def _on_user_input_transcribed(event: UserInputTranscribedEvent) -> None:
+        if not event.is_final or not event.transcript:
+            return
+        conv_logger.log_user_transcript(event)
+
+    @session.on("metrics_collected")
+    def _on_metrics_collected(event: MetricsCollectedEvent) -> None:
+        conv_logger.log_metrics(event.metrics)
+
     await session.start(
         room=ctx.room,
         agent=Assistant(),
@@ -325,12 +464,11 @@ async def my_agent(ctx: agents.JobContext):
     async def greeting_audio():
         yield audio_frame
 
-    # Play audio file directly (bypasses TTS = instant playback)
     await session.say("", audio=greeting_audio(), allow_interruptions=True)
 
 
 if __name__ == "__main__":
-    print("🚀 Ultra-Low Latency Agent - WITH MODEL PREWARMING")
+    print("🚀 Ultra-Low Latency Agent - WITH MODEL PREWARMING + METRICS")
     print("=" * 60)
     print("⚡ Optimizations:")
     print("   • VAD prewarmed (Silero)")
@@ -340,6 +478,7 @@ if __name__ == "__main__":
     print("   • Preemptive generation enabled")
     print("   • Hardcoded audio greeting")
     print("   • Min endpointing delay: 0.1s")
+    print("   • Latency metrics: metrics_component=*, component_latencies, latency_matrix")
     print("\n▶ Starting server with prewarming...\n")
 
     agents.cli.run_app(server)
