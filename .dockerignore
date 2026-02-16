@@ -1,0 +1,15 @@
+.git
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.log
+.env
+.env.*
+venv/
+.venv/
+.dist/
+*.dist-info/
+*.egg-info/
+*.whl
+*.tar.gz
