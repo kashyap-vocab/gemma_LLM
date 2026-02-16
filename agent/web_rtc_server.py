@@ -25,6 +25,7 @@ from db_storage import (
     _load_call_metadata as load_call_metadata,
     store_conversation_turn,
     persist_feedback_to_db,
+    update_call_status,
     feedback_sessions,
     _default_feedback_session,
 )
@@ -74,8 +75,31 @@ async def my_agent(ctx: agents.JobContext):
     tracker.start_turn()
 
     call_id = ctx.room.name or "unknown"
-    customer_phone, customer_name = load_call_metadata(call_id)
-    
+
+    # Extract customer phone from participant metadata (set by Smartflo bridge)
+    customer_phone_from_metadata = None
+    try:
+        # Wait briefly for participants to be available
+        await asyncio.sleep(0.5)
+
+        # Look for the smartflo caller participant
+        for participant in ctx.room.remote_participants.values():
+            if participant.metadata:
+                import json
+                try:
+                    metadata = json.loads(participant.metadata)
+                    customer_phone_from_metadata = metadata.get("customer_phone")
+                    if customer_phone_from_metadata:
+                        print(f"📞 Extracted customer_phone from metadata: {customer_phone_from_metadata}")
+                        break
+                except json.JSONDecodeError:
+                    pass
+    except Exception as e:
+        print(f"Warning: Could not extract customer_phone from metadata: {e}")
+
+    # Load customer metadata with phone lookup priority
+    customer_phone, customer_name = load_call_metadata(call_id, customer_phone=customer_phone_from_metadata)
+
     # Initialize feedback session
     feedback_sessions[call_id] = _default_feedback_session(call_id)
     if customer_name:
@@ -131,6 +155,8 @@ async def my_agent(ctx: agents.JobContext):
     async def on_close(_event):
         """Persist feedback data on session end."""
         await persist_feedback_to_db(call_id, customer_phone)
+        if customer_phone:
+            await update_call_status(customer_phone, "completed")
         feedback_sessions.pop(call_id, None)
 
     try:

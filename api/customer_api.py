@@ -10,7 +10,8 @@ import pandas as pd
 from sqlalchemy.orm import Session
 
 from db.database import get_db
-from db.models import CustomerData, CallMetadata
+from db.models import CustomerData, CallMetadata, ActiveCallContext
+from api.smartflo_client import get_smartflo_client
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +55,12 @@ class CallTriggerRequest(BaseModel):
     customer_id: int
     phone_number: str
     customer_name: str
+
+
+class CallContextRequest(BaseModel):
+    phone_number: str
+    customer_name: str
+    customer_id: Optional[int] = None
 
 
 @router.post("/customers/upload", response_model=dict)
@@ -253,43 +260,161 @@ async def get_customer(customer_id: int, db: Session = Depends(get_db)):
 async def trigger_call(request: CallTriggerRequest, db: Session = Depends(get_db)):
     """
     Trigger a call to a customer via Smartflo.
-    This endpoint would integrate with Smartflo API to initiate an outbound call.
-    For now, it returns a success message. You'll need to integrate with Smartflo's API.
+    Initiates an outbound call and stores customer context for agent personalization.
     """
-    # TODO: Integrate with Smartflo API to initiate outbound call
-    # Example: POST to Smartflo API with phone_number and customer_name
-    
     logger.info(f"Triggering call to {request.customer_name} at {request.phone_number}")
-    
-    # Store call metadata for later use
-    call_id = f"manual-{request.customer_id}-{datetime.now().timestamp()}"
-    
+
     try:
-        # Check if call_metadata already exists
-        existing = db.query(CallMetadata).filter(CallMetadata.call_id == call_id).first()
-        
-        if existing:
-            existing.customer_phone = request.phone_number
-            existing.customer_name = request.customer_name
+        # Step 1: Store/update active call context (using phone number as key)
+        existing_context = db.query(ActiveCallContext).filter(
+            ActiveCallContext.phone_number == request.phone_number
+        ).first()
+
+        if existing_context:
+            # Update existing context
+            existing_context.customer_name = request.customer_name
+            existing_context.customer_id = request.customer_id
+            existing_context.call_status = 'pending'
+            existing_context.updated_at = datetime.now()
+            logger.info(f"Updated existing call context for {request.phone_number}")
         else:
-            call_metadata = CallMetadata(
-                call_id=call_id,
-                customer_phone=request.phone_number,
-                customer_name=request.customer_name
+            # Create new context
+            active_context = ActiveCallContext(
+                phone_number=request.phone_number,
+                customer_name=request.customer_name,
+                customer_id=request.customer_id,
+                call_status='pending'
             )
-            db.add(call_metadata)
-        
+            db.add(active_context)
+            logger.info(f"Created new call context for {request.phone_number}")
+
         db.commit()
+
+        # Step 2: Initiate call via Smartflo API
+        smartflo_client = get_smartflo_client()
+        call_result = await smartflo_client.initiate_call(
+            to_number=request.phone_number,
+            custom_params={
+                "customer_name": request.customer_name,
+                "customer_id": request.customer_id
+            }
+        )
+
+        if not call_result["success"]:
+            # Smartflo API call failed
+            logger.error(f"Smartflo call failed: {call_result.get('error')}")
+
+            # Update context status to failed
+            if existing_context:
+                existing_context.call_status = 'failed'
+            else:
+                active_context.call_status = 'failed'
+            db.commit()
+
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to initiate call: {call_result.get('message', 'Unknown error')}"
+            )
+
+        # Step 3: Store call metadata with actual Smartflo call_sid
+        call_sid = call_result.get("call_sid")
+
+        if call_sid:
+            # Update active_call_context with call_id
+            if existing_context:
+                existing_context.call_id = call_sid
+            else:
+                active_context.call_id = call_sid
+
+            # Store in call_metadata for backward compatibility
+            existing_metadata = db.query(CallMetadata).filter(
+                CallMetadata.call_id == call_sid
+            ).first()
+
+            if existing_metadata:
+                existing_metadata.customer_phone = request.phone_number
+                existing_metadata.customer_name = request.customer_name
+            else:
+                call_metadata = CallMetadata(
+                    call_id=call_sid,
+                    customer_phone=request.phone_number,
+                    customer_name=request.customer_name
+                )
+                db.add(call_metadata)
+
+            db.commit()
+            logger.info(f"Stored call metadata with call_sid: {call_sid}")
+
+        return {
+            "success": True,
+            "message": f"Call initiated to {request.customer_name}",
+            "customer_id": request.customer_id,
+            "phone_number": request.phone_number,
+            "customer_name": request.customer_name,
+            "call_sid": call_sid,
+            "call_status": call_result.get("status")
+        }
+
+    except HTTPException:
+        raise
     except Exception as e:
         db.rollback()
-        logger.warning(f"Could not store call metadata: {e}")
-    
-    return {
-        "success": True,
-        "message": f"Call initiated to {request.customer_name} at {request.phone_number}",
-        "customer_id": request.customer_id,
-        "phone_number": request.phone_number,
-        "customer_name": request.customer_name
-    }
+        logger.error(f"Error triggering call: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error triggering call: {str(e)}"
+        )
+
+
+@router.post("/calls/context")
+async def update_call_context(request: CallContextRequest, db: Session = Depends(get_db)):
+    """
+    Update or create call context for a customer.
+    This allows updating customer context for calls initiated externally or mid-call.
+    Uses phone number as the primary lookup key.
+    """
+    logger.info(f"Updating call context for {request.phone_number}")
+
+    try:
+        # Find existing context by phone number
+        existing_context = db.query(ActiveCallContext).filter(
+            ActiveCallContext.phone_number == request.phone_number
+        ).first()
+
+        if existing_context:
+            # Update existing context
+            existing_context.customer_name = request.customer_name
+            if request.customer_id is not None:
+                existing_context.customer_id = request.customer_id
+            existing_context.updated_at = datetime.now()
+            logger.info(f"Updated call context for {request.phone_number}")
+        else:
+            # Create new context
+            new_context = ActiveCallContext(
+                phone_number=request.phone_number,
+                customer_name=request.customer_name,
+                customer_id=request.customer_id,
+                call_status='pending'
+            )
+            db.add(new_context)
+            logger.info(f"Created new call context for {request.phone_number}")
+
+        db.commit()
+
+        return {
+            "success": True,
+            "message": f"Call context updated for {request.phone_number}",
+            "phone_number": request.phone_number,
+            "customer_name": request.customer_name,
+            "customer_id": request.customer_id
+        }
+
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error updating call context: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error updating call context: {str(e)}"
+        )
 
 

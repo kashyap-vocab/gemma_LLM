@@ -4,7 +4,7 @@ Initialize database by creating all tables from ORM models.
 import os
 from dotenv import load_dotenv
 from db.database import engine, Base
-from db.models import Conversation, CustomerFeedbackData, CustomerData, CallMetadata
+from db.models import Conversation, CustomerFeedbackData, CustomerData, CallMetadata, ActiveCallContext
 
 load_dotenv()
 

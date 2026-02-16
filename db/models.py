@@ -145,3 +145,26 @@ class CallMetadata(Base):
         Index("idx_call_metadata_call_id", "call_id"),
         Index("idx_call_metadata_phone", "customer_phone"),
     )
+
+
+class ActiveCallContext(Base):
+    """
+    Stores active call context for ongoing calls.
+    Uses phone number as the primary lookup key for reliable agent-customer matching.
+    """
+    __tablename__ = "active_call_context"
+
+    id = Column(BigInteger, primary_key=True, index=True)
+    phone_number = Column(String(50), unique=True, nullable=False, index=True)
+    customer_name = Column(String(255))
+    customer_id = Column(BigInteger)
+    call_status = Column(String(20), default='pending')  # pending/active/completed
+    call_id = Column(String(255))  # Smartflo callSid when available
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    __table_args__ = (
+        Index("idx_active_call_context_phone", "phone_number"),
+        Index("idx_active_call_context_status", "call_status"),
+        Index("idx_active_call_context_call_id", "call_id"),
+    )

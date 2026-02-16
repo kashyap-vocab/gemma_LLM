@@ -1,6 +1,8 @@
 fastapi~=0.128.7
+uvicorn
 python-multipart
 python-dotenv
+httpx
 livekit
 livekit-agents[silero,turn-detector]~=1.3
 livekit-plugins-deepgram

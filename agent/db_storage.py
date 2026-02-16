@@ -39,26 +39,80 @@ def _to_numeric(v) -> Optional[float]:
         return None
 
 
-def _load_call_metadata(call_id: str) -> tuple[Optional[str], Optional[str]]:
-    """Load customer phone and name from call_metadata table."""
+def _load_call_metadata(call_id: str, customer_phone: Optional[str] = None) -> tuple[Optional[str], Optional[str]]:
+    """
+    Load customer phone and name from database.
+
+    Priority 1: Try active_call_context by phone number (most reliable)
+    Priority 2: Try call_metadata by call_id (fallback)
+
+    Args:
+        call_id: Call identifier from room name
+        customer_phone: Customer phone number from room metadata (if available)
+
+    Returns:
+        Tuple of (customer_phone, customer_name)
+    """
     database_url = os.getenv("DATABASE_URL")
     if not database_url:
         return None, None
+
     try:
         import psycopg2
         conn = psycopg2.connect(database_url)
         try:
             with conn.cursor() as cur:
+                # Priority 1: Lookup by phone number in active_call_context
+                if customer_phone:
+                    print(f"🔍 Looking up customer by phone: {customer_phone}")
+                    cur.execute(
+                        """
+                        SELECT phone_number, customer_name, call_status
+                        FROM active_call_context
+                        WHERE phone_number = %s
+                        ORDER BY updated_at DESC
+                        LIMIT 1
+                        """,
+                        (customer_phone,)
+                    )
+                    row = cur.fetchone()
+                    if row:
+                        phone, name, status = row
+                        print(f"✅ Found in active_call_context: {name} ({phone}), status={status}")
+
+                        # Update status to 'active' and store call_id
+                        cur.execute(
+                            """
+                            UPDATE active_call_context
+                            SET call_status = 'active', call_id = %s, updated_at = NOW()
+                            WHERE phone_number = %s
+                            """,
+                            (call_id, customer_phone)
+                        )
+                        conn.commit()
+                        print(f"📝 Updated call status to 'active' for {customer_phone}")
+
+                        return (phone, name)
+
+                # Priority 2: Fallback to call_metadata by call_id
+                print(f"🔍 Looking up customer by call_id: {call_id}")
                 cur.execute(
                     "SELECT customer_phone, customer_name FROM call_metadata WHERE call_id = %s ORDER BY created_at DESC LIMIT 1",
                     (call_id,)
                 )
                 row = cur.fetchone()
-                return (row[0], row[1]) if row else (None, None)
+                if row:
+                    print(f"✅ Found in call_metadata: {row[1]} ({row[0]})")
+                    return (row[0], row[1])
+
+                print(f"⚠️ No customer metadata found for call_id={call_id}, phone={customer_phone}")
+                return (None, None)
         finally:
             conn.close()
     except Exception as e:
         print(f"Warning: Could not load call metadata: {e}")
+        import traceback
+        traceback.print_exc()
         return None, None
 
 
@@ -197,3 +251,37 @@ async def persist_feedback_to_db(call_id: str, customer_phone: Optional[str] = N
     """Async wrapper for feedback persistence."""
     loop = asyncio.get_event_loop()
     await loop.run_in_executor(None, _persist_feedback_to_db_sync, call_id, customer_phone)
+
+
+def _update_call_status_sync(customer_phone: str, status: str) -> None:
+    """Update call status in active_call_context table."""
+    database_url = os.getenv("DATABASE_URL")
+    if not database_url or not customer_phone:
+        return
+    try:
+        import psycopg2
+        conn = psycopg2.connect(database_url)
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE active_call_context
+                    SET call_status = %s, updated_at = NOW()
+                    WHERE phone_number = %s
+                    """,
+                    (status, customer_phone)
+                )
+            conn.commit()
+            print(f"📝 Updated call status to '{status}' for {customer_phone}")
+        finally:
+            conn.close()
+    except Exception as e:
+        print(f"Warning: Could not update call status: {e}")
+
+
+async def update_call_status(customer_phone: str, status: str) -> None:
+    """Async wrapper for updating call status."""
+    if not customer_phone:
+        return
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(None, _update_call_status_sync, customer_phone, status)

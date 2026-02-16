@@ -23,10 +23,11 @@ LIVEKIT_API_SECRET = os.getenv('LIVEKIT_API_SECRET')
 
 
 class SmartfloLiveKitBridge:
-    def __init__(self, stream_sid: str, call_sid: str, account_sid: str):
+    def __init__(self, stream_sid: str, call_sid: str, account_sid: str, customer_phone: str = None):
         self.stream_sid = stream_sid
         self.call_sid = call_sid
         self.account_sid = account_sid
+        self.customer_phone = customer_phone
         self.room_name = f"smartflo-{call_sid}"
         self.room = None
         self.audio_source = None
@@ -39,6 +40,13 @@ class SmartfloLiveKitBridge:
         """Connect to LiveKit room and publish audio track"""
         logger.info(f"🚀 Setting up LiveKit for call: {self.call_sid}")
 
+        # Prepare metadata with customer phone for agent access
+        metadata = {}
+        if self.customer_phone:
+            metadata["customer_phone"] = self.customer_phone
+            metadata["call_sid"] = self.call_sid
+            logger.info(f"📝 Setting room metadata with customer_phone: {self.customer_phone}")
+
         # Generate token
         token = api.AccessToken(LIVEKIT_API_KEY, LIVEKIT_API_SECRET) \
             .with_identity(f"smartflo-caller-{self.call_sid}") \
@@ -49,6 +57,10 @@ class SmartfloLiveKitBridge:
             can_publish=True,
             can_subscribe=True,
         ))
+
+        # Add metadata to token if available
+        if metadata:
+            token = token.with_metadata(json.dumps(metadata))
 
         # Connect to room
         self.room = rtc.Room()
@@ -160,7 +172,8 @@ async def smartflo_websocket_endpoint(websocket: WebSocket):
                 logger.info(f"   Call SID: {call_sid}")
                 logger.info(f"   From: {from_number} → To: {to_number}")
 
-                bridge = SmartfloLiveKitBridge(stream_sid, call_sid, account_sid)
+                # Pass customer phone to bridge for metadata
+                bridge = SmartfloLiveKitBridge(stream_sid, call_sid, account_sid, customer_phone=from_number)
                 bridge.ws = websocket
                 await bridge.setup_livekit()
 
