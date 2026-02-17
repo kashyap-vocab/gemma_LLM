@@ -141,9 +141,9 @@ async def my_agent(ctx: agents.JobContext):
         preemptive_generation=True,
     )
 
-    # Store conversation transcripts
+    # Store conversation transcripts (sync callback, async work via create_task)
     @session.on("conversation_item_added")
-    async def on_conversation_item_added(event: ConversationItemAddedEvent):
+    def on_conversation_item_added(event: ConversationItemAddedEvent):
         item = event.item
         text = (item.text_content or "").strip()
         if not text:
@@ -170,11 +170,11 @@ async def my_agent(ctx: agents.JobContext):
         tracker.on_metrics(ev)
 
     @session.on("close")
-    async def on_close(_event):
+    def on_close(_event):
         """Persist feedback data on session end."""
-        await persist_feedback_to_db(call_id, customer_phone)
+        asyncio.create_task(persist_feedback_to_db(call_id, customer_phone))
         if customer_phone:
-            await update_call_status(customer_phone, "completed")
+            asyncio.create_task(update_call_status(customer_phone, "completed"))
         feedback_sessions.pop(call_id, None)
 
     try:
