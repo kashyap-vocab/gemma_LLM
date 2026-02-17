@@ -1,5 +1,4 @@
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from jinja2.ext import debug
 from livekit import api, rtc
 import asyncio
 import base64
@@ -20,21 +19,45 @@ app = FastAPI()
 LIVEKIT_URL = os.getenv('LIVEKIT_URL')
 LIVEKIT_API_KEY = os.getenv('LIVEKIT_API_KEY')
 LIVEKIT_API_SECRET = os.getenv('LIVEKIT_API_SECRET')
+SMARTFLO_FROM_NUMBER = os.getenv('SMARTFLO_FROM_NUMBER', '')
 
 
 class SmartfloLiveKitBridge:
-    def __init__(self, stream_sid: str, call_sid: str, account_sid: str, customer_phone: str = None):
+    def __init__(self, stream_sid: str, call_sid: str, account_sid: str,
+                 from_number: str = None, to_number: str = None):
         self.stream_sid = stream_sid
         self.call_sid = call_sid
         self.account_sid = account_sid
-        self.customer_phone = customer_phone
-        self.room_name = f"smartflo-{call_sid}"
+
+        # Determine customer phone: in an outbound click-to-call,
+        # 'to' is the customer being called, 'from' is SmartFlo caller ID.
+        # Pick whichever is NOT the SmartFlo system number.
+        self.customer_phone = self._resolve_customer_phone(from_number, to_number)
+
+        # Join the pre-created room 'call-{customer_phone}'
+        # This room was created by Route 1 (/api/calls/context)
+        self.room_name = f"call-{self.customer_phone}"
+        logger.info(f"📞 Resolved customer_phone={self.customer_phone}, room={self.room_name}")
+
         self.room = None
         self.audio_source = None
         self.audio_track = None
         self.ws = None
         self.chunk_counter = 1
         self.sequence_number = 1
+
+    @staticmethod
+    def _resolve_customer_phone(from_number: str = None, to_number: str = None) -> str:
+        """Determine which number is the customer (not the SmartFlo system number)."""
+        smartflo_num = SMARTFLO_FROM_NUMBER.lstrip('+').lstrip('91') if SMARTFLO_FROM_NUMBER else ''
+
+        for num in [to_number, from_number]:
+            if num:
+                clean = num.lstrip('+').lstrip('91')
+                if clean != smartflo_num:
+                    return num
+        # Fallback: return whichever is available
+        return to_number or from_number or "unknown"
 
     async def setup_livekit(self):
         """Connect to LiveKit room and publish audio track"""
@@ -172,8 +195,11 @@ async def smartflo_websocket_endpoint(websocket: WebSocket):
                 logger.info(f"   Call SID: {call_sid}")
                 logger.info(f"   From: {from_number} → To: {to_number}")
 
-                # Pass customer phone to bridge for metadata
-                bridge = SmartfloLiveKitBridge(stream_sid, call_sid, account_sid, customer_phone=from_number)
+                # Pass both numbers so bridge can determine which is the customer
+                bridge = SmartfloLiveKitBridge(
+                    stream_sid, call_sid, account_sid,
+                    from_number=from_number, to_number=to_number
+                )
                 bridge.ws = websocket
                 await bridge.setup_livekit()
 

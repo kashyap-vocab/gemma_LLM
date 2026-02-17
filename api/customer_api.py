@@ -1,7 +1,9 @@
 """
 FastAPI router for customer management and call triggering.
 """
+import json
 import logging
+import os
 from datetime import datetime
 from typing import List, Optional
 from fastapi import APIRouter, UploadFile, File, HTTPException, Depends
@@ -259,38 +261,41 @@ async def get_customer(customer_id: int, db: Session = Depends(get_db)):
 @router.post("/calls/trigger")
 async def trigger_call(request: CallTriggerRequest, db: Session = Depends(get_db)):
     """
-    Trigger a call to a customer via Smartflo.
-    Initiates an outbound call and stores customer context for agent personalization.
+    Route 2: Trigger the SmartFlo outbound call to connect customer to the agent.
+    Call this AFTER /api/calls/context so the agent is already in the room.
+
+    Flow:
+    1. Initiate SmartFlo click-to-call to customer's phone
+    2. SmartFlo calls customer → customer answers → WebSocket connects to bridge
+    3. Bridge joins the pre-created LiveKit room 'call-{phone_number}'
+    4. Customer audio flows to agent (already waiting in room)
     """
-    logger.info(f"Triggering call to {request.customer_name} at {request.phone_number}")
+    logger.info(f"[Route 2] Triggering SmartFlo call to {request.customer_name} at {request.phone_number}")
 
     try:
-        # Step 1: Store/update active call context (using phone number as key)
+        # Update call context status to 'calling'
         existing_context = db.query(ActiveCallContext).filter(
             ActiveCallContext.phone_number == request.phone_number
         ).first()
 
         if existing_context:
-            # Update existing context
-            existing_context.customer_name = request.customer_name
-            existing_context.customer_id = request.customer_id
-            existing_context.call_status = 'pending'
+            existing_context.call_status = 'calling'
             existing_context.updated_at = datetime.now()
-            logger.info(f"Updated existing call context for {request.phone_number}")
         else:
-            # Create new context
-            active_context = ActiveCallContext(
+            # If Route 1 wasn't called first, create context now
+            logger.warning(f"No existing context for {request.phone_number} - Route 1 may not have been called")
+            existing_context = ActiveCallContext(
                 phone_number=request.phone_number,
                 customer_name=request.customer_name,
                 customer_id=request.customer_id,
-                call_status='pending'
+                call_status='calling',
+                call_id=f"call-{request.phone_number}"
             )
-            db.add(active_context)
-            logger.info(f"Created new call context for {request.phone_number}")
+            db.add(existing_context)
 
         db.commit()
 
-        # Step 2: Initiate call via Smartflo API
+        # Initiate call via SmartFlo API
         smartflo_client = get_smartflo_client()
         call_result = await smartflo_client.initiate_call(
             to_number=request.phone_number,
@@ -301,49 +306,16 @@ async def trigger_call(request: CallTriggerRequest, db: Session = Depends(get_db
         )
 
         if not call_result["success"]:
-            # Smartflo API call failed
-            logger.error(f"Smartflo call failed: {call_result.get('error')}")
-
-            # Update context status to failed
-            if existing_context:
-                existing_context.call_status = 'failed'
-            else:
-                active_context.call_status = 'failed'
+            logger.error(f"SmartFlo call failed: {call_result.get('error')}")
+            existing_context.call_status = 'failed'
             db.commit()
-
             raise HTTPException(
                 status_code=500,
                 detail=f"Failed to initiate call: {call_result.get('message', 'Unknown error')}"
             )
 
-        # Step 3: Store call metadata with actual Smartflo call_sid
         call_sid = call_result.get("call_sid")
-
-        if call_sid:
-            # Update active_call_context with call_id
-            if existing_context:
-                existing_context.call_id = call_sid
-            else:
-                active_context.call_id = call_sid
-
-            # Store in call_metadata for backward compatibility
-            existing_metadata = db.query(CallMetadata).filter(
-                CallMetadata.call_id == call_sid
-            ).first()
-
-            if existing_metadata:
-                existing_metadata.customer_phone = request.phone_number
-                existing_metadata.customer_name = request.customer_name
-            else:
-                call_metadata = CallMetadata(
-                    call_id=call_sid,
-                    customer_phone=request.phone_number,
-                    customer_name=request.customer_name
-                )
-                db.add(call_metadata)
-
-            db.commit()
-            logger.info(f"Stored call metadata with call_sid: {call_sid}")
+        logger.info(f"SmartFlo call initiated. call_sid={call_sid}")
 
         return {
             "success": True,
@@ -369,52 +341,115 @@ async def trigger_call(request: CallTriggerRequest, db: Session = Depends(get_db
 @router.post("/calls/context")
 async def update_call_context(request: CallContextRequest, db: Session = Depends(get_db)):
     """
-    Update or create call context for a customer.
-    This allows updating customer context for calls initiated externally or mid-call.
-    Uses phone number as the primary lookup key.
+    Route 1: Store customer name and create LiveKit room with agent dispatch.
+    Call this BEFORE triggering the SmartFlo call so the agent is ready.
+
+    Flow:
+    1. Store customer context (name + phone) in DB
+    2. Create a LiveKit room named 'call-{phone_number}'
+    3. Dispatch the agent to that room with customer metadata
     """
-    logger.info(f"Updating call context for {request.phone_number}")
+    logger.info(f"[Route 1] Setting up agent for {request.customer_name} ({request.phone_number})")
 
     try:
-        # Find existing context by phone number
+        # Step 1: Store/update call context in DB
         existing_context = db.query(ActiveCallContext).filter(
             ActiveCallContext.phone_number == request.phone_number
         ).first()
 
+        room_name = f"call-{request.phone_number}"
+
         if existing_context:
-            # Update existing context
             existing_context.customer_name = request.customer_name
             if request.customer_id is not None:
                 existing_context.customer_id = request.customer_id
+            existing_context.call_status = 'agent_ready'
+            existing_context.call_id = room_name
             existing_context.updated_at = datetime.now()
             logger.info(f"Updated call context for {request.phone_number}")
         else:
-            # Create new context
             new_context = ActiveCallContext(
                 phone_number=request.phone_number,
                 customer_name=request.customer_name,
                 customer_id=request.customer_id,
-                call_status='pending'
+                call_status='agent_ready',
+                call_id=room_name
             )
             db.add(new_context)
             logger.info(f"Created new call context for {request.phone_number}")
 
+        # Also store in call_metadata for agent DB lookup
+        existing_metadata = db.query(CallMetadata).filter(
+            CallMetadata.call_id == room_name
+        ).first()
+        if existing_metadata:
+            existing_metadata.customer_phone = request.phone_number
+            existing_metadata.customer_name = request.customer_name
+        else:
+            db.add(CallMetadata(
+                call_id=room_name,
+                customer_phone=request.phone_number,
+                customer_name=request.customer_name
+            ))
+
         db.commit()
+
+        # Step 2: Create LiveKit room and dispatch agent
+        from livekit import api as livekit_api
+
+        lk_url = os.getenv("LIVEKIT_URL", "")
+        lk_api_key = os.getenv("LIVEKIT_API_KEY", "")
+        lk_api_secret = os.getenv("LIVEKIT_API_SECRET", "")
+
+        # Convert wss:// to https:// for API calls
+        api_url = lk_url.replace("wss://", "https://")
+
+        room_metadata = json.dumps({
+            "customer_phone": request.phone_number,
+            "customer_name": request.customer_name,
+            "customer_id": request.customer_id,
+        })
+
+        async with livekit_api.LiveKitAPI(
+            url=api_url,
+            api_key=lk_api_key,
+            api_secret=lk_api_secret,
+        ) as lk:
+            # Create room with agent dispatch in one call
+            await lk.room.create_room(
+                livekit_api.CreateRoomRequest(
+                    name=room_name,
+                    empty_timeout=300,  # 5 min timeout if empty
+                    metadata=room_metadata,
+                    agents=[
+                        livekit_api.RoomAgent(
+                            dispatches=[
+                                livekit_api.RoomAgentDispatch(
+                                    agent_name="LTFS_SurveyAgent-Soma",
+                                    metadata=room_metadata,
+                                )
+                            ]
+                        )
+                    ],
+                )
+            )
+            logger.info(f"Created LiveKit room '{room_name}' and dispatched agent")
 
         return {
             "success": True,
-            "message": f"Call context updated for {request.phone_number}",
+            "message": f"Agent dispatched for {request.customer_name}",
             "phone_number": request.phone_number,
             "customer_name": request.customer_name,
-            "customer_id": request.customer_id
+            "customer_id": request.customer_id,
+            "room_name": room_name,
         }
 
     except Exception as e:
         db.rollback()
-        logger.error(f"Error updating call context: {e}", exc_info=True)
+        logger.error(f"Error in Route 1 (context + dispatch): {e}", exc_info=True)
         raise HTTPException(
             status_code=500,
-            detail=f"Error updating call context: {str(e)}"
+            detail=f"Error setting up agent: {str(e)}"
         )
 
 

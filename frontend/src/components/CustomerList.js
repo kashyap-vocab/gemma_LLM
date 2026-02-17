@@ -11,20 +11,36 @@ function CustomerList({ customers, loading, onRefresh }) {
     setCalling({ ...calling, [customerId]: true });
 
     try {
-      const response = await axios.post('/api/calls/trigger', {
+      // Step 1: Send customer name to agent and create LiveKit room
+      console.log(`[Step 1] Dispatching agent for ${customer.customer_name}...`);
+      const contextResponse = await axios.post('/api/calls/context', {
+        phone_number: customer.contact_number,
+        customer_name: customer.customer_name,
+        customer_id: customerId,
+      });
+      console.log(`[Step 1] Agent dispatched:`, contextResponse.data);
+
+      // Step 2: Wait for agent to initialize in the room
+      console.log(`[Step 2] Waiting 5s for agent to initialize...`);
+      await new Promise(resolve => setTimeout(resolve, 5000));
+
+      // Step 3: Trigger SmartFlo call to connect customer to the agent
+      console.log(`[Step 3] Triggering SmartFlo call to ${customer.contact_number}...`);
+      const callResponse = await axios.post('/api/calls/trigger', {
         customer_id: customerId,
         phone_number: customer.contact_number,
         customer_name: customer.customer_name,
       });
+      console.log(`[Step 3] Call triggered:`, callResponse.data);
 
-      alert(`✅ ${response.data.message}\n\nCall will be initiated to ${customer.customer_name} at ${customer.contact_number}`);
-      
-      // Refresh the list
+      alert(`✅ Agent ready. Call initiated to ${customer.customer_name} at ${customer.contact_number}`);
+
       if (onRefresh) {
         onRefresh();
       }
     } catch (error) {
-      alert(`❌ Failed to trigger call: ${error.response?.data?.detail || error.message}`);
+      console.error('Call flow error:', error);
+      alert(`❌ Failed: ${error.response?.data?.detail || error.message}`);
     } finally {
       setCalling({ ...calling, [customerId]: false });
     }

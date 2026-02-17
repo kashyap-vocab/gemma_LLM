@@ -69,6 +69,7 @@ def prewarm(proc: agents.JobProcess):
 
 async def my_agent(ctx: agents.JobContext):
     """Main agent session with official LiveKit metrics"""
+    import json as _json
 
     # Create metrics tracker
     tracker = MetricsTracker()
@@ -76,29 +77,44 @@ async def my_agent(ctx: agents.JobContext):
 
     call_id = ctx.room.name or "unknown"
 
-    # Extract customer phone from participant metadata (set by Smartflo bridge)
-    customer_phone_from_metadata = None
+    # === Extract customer info ===
+    # Priority 1: Room metadata (set when room was created by /api/calls/context)
+    customer_phone = None
+    customer_name = None
+
     try:
-        # Wait briefly for participants to be available
-        await asyncio.sleep(0.5)
-
-        # Look for the smartflo caller participant
-        for participant in ctx.room.remote_participants.values():
-            if participant.metadata:
-                import json
-                try:
-                    metadata = json.loads(participant.metadata)
-                    customer_phone_from_metadata = metadata.get("customer_phone")
-                    if customer_phone_from_metadata:
-                        print(f"📞 Extracted customer_phone from metadata: {customer_phone_from_metadata}")
-                        break
-                except json.JSONDecodeError:
-                    pass
+        room_meta_str = ctx.room.metadata
+        if room_meta_str:
+            room_meta = _json.loads(room_meta_str)
+            customer_phone = room_meta.get("customer_phone")
+            customer_name = room_meta.get("customer_name")
+            if customer_phone or customer_name:
+                print(f"✅ Got customer info from room metadata: {customer_name} ({customer_phone})")
     except Exception as e:
-        print(f"Warning: Could not extract customer_phone from metadata: {e}")
+        print(f"Warning: Could not parse room metadata: {e}")
 
-    # Load customer metadata with phone lookup priority
-    customer_phone, customer_name = load_call_metadata(call_id, customer_phone=customer_phone_from_metadata)
+    # Priority 2: Participant metadata (fallback for backward compatibility)
+    if not customer_phone:
+        try:
+            await asyncio.sleep(0.5)
+            for participant in ctx.room.remote_participants.values():
+                if participant.metadata:
+                    try:
+                        metadata = _json.loads(participant.metadata)
+                        customer_phone = metadata.get("customer_phone")
+                        if customer_phone:
+                            print(f"📞 Got customer_phone from participant metadata: {customer_phone}")
+                            break
+                    except _json.JSONDecodeError:
+                        pass
+        except Exception as e:
+            print(f"Warning: Could not extract customer_phone from participant metadata: {e}")
+
+    # Priority 3: DB lookup (fallback)
+    if not customer_name:
+        db_phone, db_name = load_call_metadata(call_id, customer_phone=customer_phone)
+        customer_phone = customer_phone or db_phone
+        customer_name = db_name or customer_name
 
     # Initialize feedback session
     feedback_sessions[call_id] = _default_feedback_session(call_id)
@@ -109,6 +125,8 @@ async def my_agent(ctx: agents.JobContext):
     print(f"Room: {call_id}")
     if customer_name:
         print(f"Customer: {customer_name} ({customer_phone})")
+    else:
+        print(f"⚠️ No customer name found - agent will proceed without personalization")
     print()
 
     # Use prewarmed models
