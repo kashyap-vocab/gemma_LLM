@@ -1,6 +1,7 @@
 import asyncio
 
 from dotenv import load_dotenv
+from google import genai
 from google.genai import types
 from livekit import agents, rtc
 from livekit.agents import (
@@ -190,8 +191,23 @@ async def my_agent(ctx: agents.JobContext):
             ),
         )
 
+        # Transliterate customer name to Devanagari for TTS
+        hindi_name = None
+        if customer_name:
+            try:
+                client = genai.Client()
+                resp = await client.aio.models.generate_content(
+                    model="gemini-2.0-flash",
+                    contents=f"Convert this Indian name from English to Hindi Devanagari script. Reply with ONLY the Devanagari name, nothing else: {customer_name}",
+                )
+                hindi_name = resp.text.strip()
+                print(f"📝 Transliterated name: {customer_name} → {hindi_name}")
+            except Exception as e:
+                print(f"⚠️ Transliteration failed, using original: {e}")
+                hindi_name = customer_name
+
         # Dynamic greeting with customer name via TTS
-        name_part = f"{customer_name} जी" if customer_name else "आप"
+        name_part = f"{hindi_name} जी" if hindi_name else "आप"
         greeting_text = f"नमस्ते, मैं एल एंड टी फाइनेंस की तरफ़ से बात कर रही हूँ। यह कॉल आपके पेमेंट अनुभव को जानने के लिए है। क्या मेरी बात {name_part} से हो रही है?"
         print(f"🗣️ Greeting: {greeting_text}")
         await session.say(greeting_text, allow_interruptions=True)
