@@ -422,13 +422,9 @@ async def update_call_context(request: CallContextRequest, db: Session = Depends
                     empty_timeout=300,  # 5 min timeout if empty
                     metadata=room_metadata,
                     agents=[
-                        livekit_api.RoomAgent(
-                            dispatches=[
-                                livekit_api.RoomAgentDispatch(
-                                    agent_name="LTFS_SurveyAgent-Soma",
-                                    metadata=room_metadata,
-                                )
-                            ]
+                        livekit_api.RoomAgentDispatch(
+                            agent_name="LTFS_SurveyAgent-Soma",
+                            metadata=room_metadata,
                         )
                     ],
                 )
