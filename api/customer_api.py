@@ -17,6 +17,18 @@ from api.smartflo_client import get_smartflo_client
 
 logger = logging.getLogger(__name__)
 
+
+def normalize_phone(number: str) -> str:
+    """Strip +, country code 91, spaces, dashes to get bare 10-digit number."""
+    if not number:
+        return number
+    clean = number.strip().replace(" ", "").replace("-", "")
+    clean = clean.lstrip('+')
+    if clean.startswith('91') and len(clean) > 10:
+        clean = clean[2:]
+    return clean
+
+
 router = APIRouter()
 
 
@@ -357,7 +369,9 @@ async def update_call_context(request: CallContextRequest, db: Session = Depends
             ActiveCallContext.phone_number == request.phone_number
         ).first()
 
-        room_name = f"call-{request.phone_number}"
+        phone_normalized = normalize_phone(request.phone_number)
+        room_name = f"call-{phone_normalized}"
+        logger.info(f"[Route 1] Normalized phone: {request.phone_number} → {phone_normalized}, room: {room_name}")
 
         if existing_context:
             existing_context.customer_name = request.customer_name
@@ -405,7 +419,7 @@ async def update_call_context(request: CallContextRequest, db: Session = Depends
         api_url = lk_url.replace("wss://", "https://")
 
         room_metadata = json.dumps({
-            "customer_phone": request.phone_number,
+            "customer_phone": phone_normalized,
             "customer_name": request.customer_name,
             "customer_id": request.customer_id,
         })

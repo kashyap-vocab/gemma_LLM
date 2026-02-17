@@ -5,12 +5,7 @@ import base64
 import json
 import os
 from dotenv import load_dotenv
-import logging
 import audioop
-
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-logging.getLogger("root").setLevel(logging.WARNING)
 
 load_dotenv()
 
@@ -20,6 +15,17 @@ LIVEKIT_URL = os.getenv('LIVEKIT_URL')
 LIVEKIT_API_KEY = os.getenv('LIVEKIT_API_KEY')
 LIVEKIT_API_SECRET = os.getenv('LIVEKIT_API_SECRET')
 SMARTFLO_FROM_NUMBER = os.getenv('SMARTFLO_FROM_NUMBER', '')
+
+
+def normalize_phone(number: str) -> str:
+    """Strip +, country code 91, spaces, dashes to get bare 10-digit number."""
+    if not number:
+        return number
+    clean = number.strip().replace(" ", "").replace("-", "")
+    clean = clean.lstrip('+')
+    if clean.startswith('91') and len(clean) > 10:
+        clean = clean[2:]
+    return clean
 
 
 class SmartfloLiveKitBridge:
@@ -37,7 +43,8 @@ class SmartfloLiveKitBridge:
         # Join the pre-created room 'call-{customer_phone}'
         # This room was created by Route 1 (/api/calls/context)
         self.room_name = f"call-{self.customer_phone}"
-        logger.info(f"📞 Resolved customer_phone={self.customer_phone}, room={self.room_name}")
+        print(f"[BRIDGE] 📞 Resolved customer_phone={self.customer_phone}, room={self.room_name}")
+        print(f"[BRIDGE]    Raw from={from_number}, to={to_number}")
 
         self.room = None
         self.audio_source = None
@@ -48,27 +55,28 @@ class SmartfloLiveKitBridge:
 
     @staticmethod
     def _resolve_customer_phone(from_number: str = None, to_number: str = None) -> str:
-        """Determine which number is the customer (not the SmartFlo system number)."""
-        smartflo_num = SMARTFLO_FROM_NUMBER.lstrip('+').lstrip('91') if SMARTFLO_FROM_NUMBER else ''
+        """Determine which number is the customer (not the SmartFlo system number).
+        Returns normalized 10-digit number to match room naming in Route 1."""
+        smartflo_num = normalize_phone(SMARTFLO_FROM_NUMBER) if SMARTFLO_FROM_NUMBER else ''
 
         for num in [to_number, from_number]:
             if num:
-                clean = num.lstrip('+').lstrip('91')
-                if clean != smartflo_num:
-                    return num
-        # Fallback: return whichever is available
-        return to_number or from_number or "unknown"
+                clean = normalize_phone(num)
+                if clean and clean != smartflo_num:
+                    return clean  # Return normalized number
+        # Fallback
+        return normalize_phone(to_number) or normalize_phone(from_number) or "unknown"
 
     async def setup_livekit(self):
         """Connect to LiveKit room and publish audio track"""
-        logger.info(f"🚀 Setting up LiveKit for call: {self.call_sid}")
+        print(f"[BRIDGE] 🚀 Setting up LiveKit for call: {self.call_sid}")
 
         # Prepare metadata with customer phone for agent access
         metadata = {}
         if self.customer_phone:
             metadata["customer_phone"] = self.customer_phone
             metadata["call_sid"] = self.call_sid
-            logger.info(f"📝 Setting room metadata with customer_phone: {self.customer_phone}")
+            print(f"[BRIDGE] 📝 Setting participant metadata with customer_phone: {self.customer_phone}")
 
         # Generate token
         token = api.AccessToken(LIVEKIT_API_KEY, LIVEKIT_API_SECRET) \
@@ -92,13 +100,14 @@ class SmartfloLiveKitBridge:
         @self.room.on("track_subscribed")
         def on_track_subscribed(track: rtc.Track, publication: rtc.RemoteTrackPublication,
                                 participant: rtc.RemoteParticipant):
-            logger.info(f"📢 Subscribed to {track.kind} track from {participant.identity}")
+            print(f"[BRIDGE] 📢 Subscribed to {track.kind} track from {participant.identity}")
 
             if track.kind == rtc.TrackKind.KIND_AUDIO:
                 asyncio.create_task(self.forward_livekit_to_smartflo(track))
 
+        print(f"[BRIDGE] Connecting to LiveKit room: {self.room_name} at {LIVEKIT_URL}")
         await self.room.connect(LIVEKIT_URL, token.to_jwt())
-        logger.info(f"✅ Connected to LiveKit room: {self.room_name}")
+        print(f"[BRIDGE] ✅ Connected to LiveKit room: {self.room_name}")
 
         # Create audio source for Smartflo audio (8kHz mulaw)
         self.audio_source = rtc.AudioSource(8000, 1)  # 8kHz, mono
@@ -111,7 +120,7 @@ class SmartfloLiveKitBridge:
         options.source = rtc.TrackSource.SOURCE_MICROPHONE
 
         await self.room.local_participant.publish_track(self.audio_track, options)
-        logger.info("🎤 Published audio track to LiveKit")
+        print("[BRIDGE] 🎤 Published audio track to LiveKit")
 
     async def send_smartflo_audio_to_livekit(self, audio_payload: str):
         """Convert Smartflo mulaw audio to PCM and send to LiveKit"""
@@ -135,7 +144,7 @@ class SmartfloLiveKitBridge:
             await self.audio_source.capture_frame(frame)
 
         except Exception as e:
-            logger.error(f"❌ Error processing audio: {e}")
+            print(f"[BRIDGE] ❌ Error processing audio: {e}")
 
     async def forward_livekit_to_smartflo(self, track: rtc.AudioTrack):
         """Forward audio from LiveKit agent back to Smartflo"""
@@ -169,17 +178,20 @@ class SmartfloLiveKitBridge:
 async def smartflo_websocket_endpoint(websocket: WebSocket):
     """Handle Smartflo WebSocket connection - Main endpoint"""
     await websocket.accept()
-    logger.info("📞 Smartflo WebSocket connected")
+    print("[BRIDGE] 📞 Smartflo WebSocket connected")
 
     bridge = None
+    media_count = 0
 
     try:
         while True:
             message = await websocket.receive_text()
             data = json.loads(message)
             event = data.get("event")
+
             if event == "connected":
-                logger.info("✅ Smartflo connected event received")
+                print(f"[BRIDGE] ✅ Smartflo 'connected' event received")
+                print(f"[BRIDGE]    Full data: {json.dumps(data, indent=2)}")
 
             elif event == "start":
                 # Call started - extract metadata
@@ -187,13 +199,16 @@ async def smartflo_websocket_endpoint(websocket: WebSocket):
                 stream_sid = start_data.get("streamSid")
                 call_sid = start_data.get("callSid")
                 account_sid = start_data.get("accountSid")
-                from_number = data.get("from")
-                to_number = data.get("to")
 
-                logger.info(f"📞 Call started:")
-                logger.info(f"   Stream SID: {stream_sid}")
-                logger.info(f"   Call SID: {call_sid}")
-                logger.info(f"   From: {from_number} → To: {to_number}")
+                # Try both top-level and inside 'start' for from/to numbers
+                from_number = data.get("from") or start_data.get("from")
+                to_number = data.get("to") or start_data.get("to")
+
+                print(f"[BRIDGE] 📞 Call 'start' event:")
+                print(f"[BRIDGE]    Stream SID: {stream_sid}")
+                print(f"[BRIDGE]    Call SID: {call_sid}")
+                print(f"[BRIDGE]    From: {from_number} → To: {to_number}")
+                print(f"[BRIDGE]    Full start data: {json.dumps(data, indent=2)}")
 
                 # Pass both numbers so bridge can determine which is the customer
                 bridge = SmartfloLiveKitBridge(
@@ -205,6 +220,11 @@ async def smartflo_websocket_endpoint(websocket: WebSocket):
 
             elif event == "media":
                 # Incoming audio from caller
+                media_count += 1
+                if media_count <= 3:
+                    print(f"[BRIDGE] 🎵 Receiving media packet #{media_count}")
+                elif media_count == 4:
+                    print(f"[BRIDGE] 🎵 (suppressing further media logs...)")
                 if bridge:
                     media_data = data.get("media", {})
                     payload = media_data.get("payload")
@@ -212,33 +232,36 @@ async def smartflo_websocket_endpoint(websocket: WebSocket):
                         await bridge.send_smartflo_audio_to_livekit(payload)
 
             elif event == "dtmf":
-                # DTMF tone received
                 dtmf_data = data.get("dtmf", {})
                 digit = dtmf_data.get("digit")
-                logger.info(f"🔢 DTMF received: {digit}")
+                print(f"[BRIDGE] 🔢 DTMF received: {digit}")
 
             elif event == "stop":
-                logger.info("📴 Call ended")
+                print(f"[BRIDGE] 📴 Call ended")
                 stop_data = data.get("stop", {})
                 reason = stop_data.get("reason", "Unknown")
-                logger.info(f"   Reason: {reason}")
+                print(f"[BRIDGE]    Reason: {reason}")
+                print(f"[BRIDGE]    Total media packets received: {media_count}")
 
                 if bridge and bridge.room:
                     await bridge.room.disconnect()
                 break
 
             elif event == "mark":
-                # Mark event received - audio playback complete
                 mark_data = data.get("mark", {})
                 mark_name = mark_data.get("name")
-                logger.info(f"✅ Mark received: {mark_name}")
+                print(f"[BRIDGE] ✅ Mark received: {mark_name}")
+
+            else:
+                print(f"[BRIDGE] ❓ Unknown event: {event}")
+                print(f"[BRIDGE]    Data: {json.dumps(data, indent=2)}")
 
     except WebSocketDisconnect:
-        logger.info("🔌 WebSocket disconnected")
+        print(f"[BRIDGE] 🔌 WebSocket disconnected (media packets: {media_count})")
         if bridge and bridge.room:
             await bridge.room.disconnect()
     except Exception as e:
-        logger.error(f"❌ Error in WebSocket handler: {e}")
+        print(f"[BRIDGE] ❌ Error in WebSocket handler: {e}")
         import traceback
         traceback.print_exc()
         if bridge and bridge.room:
