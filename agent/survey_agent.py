@@ -231,9 +231,24 @@ Never use English script.
 
 Never argue or pressure.
 
-When you learn or confirm any of the above information, store it using the provided tools: store_identity_confirmed, store_loan_taken, store_last_month_payment, add_payment_detail, and complete_survey when the customer confirms the summary.
+When you learn or confirm any of the above information, store it using the provided tools: store_identity_confirmed, store_loan_taken, store_last_month_payment, store_payee, store_payment_amount, store_payment_date, store_payment_mode, store_payment_reason, store_payee_details, store_field_executive, and complete_survey when the customer confirms the summary.
             """ + name_hint,
         )
+
+    def _store(self, key: str, value):
+        """Helper to store a value in the feedback session."""
+        if not self._call_id:
+            return
+        feedback_sessions.setdefault(self._call_id, _default_feedback_session(self._call_id))[key] = value
+
+    def _store_payment(self, key: str, value: str):
+        """Helper to store a payment detail."""
+        if not self._call_id:
+            return
+        session = feedback_sessions.setdefault(self._call_id, _default_feedback_session(self._call_id))
+        if "payment" not in session:
+            session["payment"] = {}
+        session["payment"][key] = value
 
     @function_tool()
     async def store_identity_confirmed(self, status: str) -> None:
@@ -242,9 +257,7 @@ When you learn or confirm any of the above information, store it using the provi
         Args:
             status: YES or NO or NOT_AVAILABLE or SENSITIVE_SITUATION
         """
-        if not self._call_id:
-            return
-        feedback_sessions.setdefault(self._call_id, _default_feedback_session(self._call_id))["identity_confirmed"] = status
+        self._store("identity_confirmed", status)
 
     @function_tool()
     async def store_loan_taken(self, has_loan: bool) -> None:
@@ -253,9 +266,7 @@ When you learn or confirm any of the above information, store it using the provi
         Args:
             has_loan: True if customer has loan, False otherwise
         """
-        if not self._call_id:
-            return
-        feedback_sessions.setdefault(self._call_id, _default_feedback_session(self._call_id))["loan_taken"] = has_loan
+        self._store("loan_taken", has_loan)
 
     @function_tool()
     async def store_last_month_payment(self, value: str) -> None:
@@ -264,27 +275,76 @@ When you learn or confirm any of the above information, store it using the provi
         Args:
             value: What the customer said about last month payment
         """
-        if not self._call_id:
-            return
-        feedback_sessions.setdefault(self._call_id, _default_feedback_session(self._call_id))["last_month_payment"] = value
+        self._store("last_month_payment", value)
 
     @function_tool()
-    async def add_payment_detail(self, field: str, value: str) -> None:
+    async def store_payee(self, payee: str) -> None:
         """
-        Store one payment detail. Call once per piece of information.
+        Store who made the payment.
         Args:
-            field: Must be exactly one of: amount, date, mode, reason, payee, payee_name, payee_contact, field_executive_name, field_executive_contact
-            value: The value the customer provided for this field
+            payee: self or relative or friend or third_party
         """
-        if not self._call_id:
-            return
-        sid = self._call_id
-        feedback_sessions.setdefault(sid, _default_feedback_session(sid))
-        if "payment" not in feedback_sessions[sid]:
-            feedback_sessions[sid]["payment"] = {}
-        # Normalize: strip payment_ prefix if LLM adds it
-        clean_field = field.replace("payment_", "") if field.startswith("payment_") else field
-        feedback_sessions[sid]["payment"][clean_field] = value
+        self._store_payment("payee", payee)
+
+    @function_tool()
+    async def store_payment_amount(self, amount: str) -> None:
+        """
+        Store payment amount.
+        Args:
+            amount: The amount paid, e.g. 5555
+        """
+        self._store_payment("amount", amount)
+
+    @function_tool()
+    async def store_payment_date(self, date: str) -> None:
+        """
+        Store payment date.
+        Args:
+            date: Date of payment in dd-mm-yyyy format
+        """
+        self._store_payment("date", date)
+
+    @function_tool()
+    async def store_payment_mode(self, mode: str) -> None:
+        """
+        Store payment mode.
+        Args:
+            mode: How payment was made, e.g. UPI, cash, online, NACH, branch, field_executive
+        """
+        self._store_payment("mode", mode)
+
+    @function_tool()
+    async def store_payment_reason(self, reason: str) -> None:
+        """
+        Store payment reason.
+        Args:
+            reason: Why the payment was made, e.g. EMI, settlement, foreclosure
+        """
+        self._store_payment("reason", reason)
+
+    @function_tool()
+    async def store_payee_details(self, payee_name: str, payee_contact: str = "") -> None:
+        """
+        Store third-party or relative payee name and contact.
+        Args:
+            payee_name: Name of the person who paid
+            payee_contact: Contact number of the payee
+        """
+        self._store_payment("payee_name", payee_name)
+        if payee_contact:
+            self._store_payment("payee_contact", payee_contact)
+
+    @function_tool()
+    async def store_field_executive(self, name: str, contact: str = "") -> None:
+        """
+        Store field executive details if payment was made via field executive.
+        Args:
+            name: Name of the field executive
+            contact: Contact number of the field executive
+        """
+        self._store_payment("field_executive_name", name)
+        if contact:
+            self._store_payment("field_executive_contact", contact)
 
     @function_tool()
     async def complete_survey(self, confirmed: bool) -> None:
@@ -297,5 +357,4 @@ When you learn or confirm any of the above information, store it using the provi
             return
         feedback_sessions.setdefault(self._call_id, _default_feedback_session(self._call_id))["confirmed"] = confirmed
         feedback_sessions[self._call_id]["category"] = "COMPLETE_SURVEY"
-        # Only persist to DB here at completion
         asyncio.create_task(persist_feedback_to_db(self._call_id))
