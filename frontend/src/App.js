@@ -39,12 +39,12 @@ function App() {
       </header>
       
       <main className="App-main">
-        <CustomerUpload onUploadSuccess={handleUploadSuccess} />
-        <CustomerList 
-          customers={customers} 
+        <CustomerList
+          customers={customers}
           loading={loading}
           onRefresh={fetchCustomers}
         />
+        <CustomerUpload onUploadSuccess={handleUploadSuccess} />
       </main>
     </div>
   );

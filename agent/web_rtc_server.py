@@ -53,8 +53,8 @@ def prewarm(proc: agents.JobProcess):
 
     proc.userdata["tts"] = sarvam.TTS(
         target_language_code="hi-IN",
-        speaker="manisha",
-        model="bulbul:v2",
+        speaker="simran",
+        model="bulbul:v3",
         pace=1.0,
         pitch=0.0,
         loudness=1.0,

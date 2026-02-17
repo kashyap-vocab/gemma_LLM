@@ -52,8 +52,8 @@ function CustomerUpload({ onUploadSuccess }) {
 
   return (
     <div className="card">
-      <h2>📤 Upload Customer Data</h2>
-      
+      <h2>Upload Customer Data</h2>
+
       {message && <div className="success">{message}</div>}
       {error && <div className="error">{error}</div>}
 
@@ -66,22 +66,18 @@ function CustomerUpload({ onUploadSuccess }) {
           {uploading ? (
             <>
               <div className="spinner"></div>
-              <p>Uploading and processing Excel file...</p>
+              <p>Uploading and processing...</p>
             </>
           ) : isDragActive ? (
-            <>
-              <span className="upload-icon">📁</span>
-              <p>Drop the Excel file here...</p>
-            </>
+            <p>Drop the Excel file here...</p>
           ) : (
             <>
-              <span className="upload-icon">📄</span>
               <p>
                 <strong>Drag & drop</strong> an Excel file here, or{' '}
                 <strong>click to select</strong>
               </p>
               <p className="upload-hint">
-                Supported formats: .xlsx, .xls
+                .xlsx, .xls
               </p>
             </>
           )}

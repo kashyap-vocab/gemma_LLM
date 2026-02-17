@@ -4,6 +4,7 @@ import './CustomerList.css';
 
 function CustomerList({ customers, loading, onRefresh }) {
   const [calling, setCalling] = useState({});
+  const [done, setDone] = useState({});
   const [searchTerm, setSearchTerm] = useState('');
 
   const handleCall = async (customer) => {
@@ -11,7 +12,6 @@ function CustomerList({ customers, loading, onRefresh }) {
     setCalling({ ...calling, [customerId]: true });
 
     try {
-      // Step 1: Send customer name to agent and create LiveKit room
       console.log(`[Step 1] Dispatching agent for ${customer.customer_name}...`);
       const contextResponse = await axios.post('/api/calls/context', {
         phone_number: customer.contact_number,
@@ -20,11 +20,9 @@ function CustomerList({ customers, loading, onRefresh }) {
       });
       console.log(`[Step 1] Agent dispatched:`, contextResponse.data);
 
-      // Step 2: Wait for agent to initialize in the room
       console.log(`[Step 2] Waiting 5s for agent to initialize...`);
       await new Promise(resolve => setTimeout(resolve, 5000));
 
-      // Step 3: Trigger SmartFlo call to connect customer to the agent
       console.log(`[Step 3] Triggering SmartFlo call to ${customer.contact_number}...`);
       const callResponse = await axios.post('/api/calls/trigger', {
         customer_id: customerId,
@@ -33,14 +31,14 @@ function CustomerList({ customers, loading, onRefresh }) {
       });
       console.log(`[Step 3] Call triggered:`, callResponse.data);
 
-      alert(`✅ Agent ready. Call initiated to ${customer.customer_name} at ${customer.contact_number}`);
+      setDone({ ...done, [customerId]: true });
 
       if (onRefresh) {
         onRefresh();
       }
     } catch (error) {
       console.error('Call flow error:', error);
-      alert(`❌ Failed: ${error.response?.data?.detail || error.message}`);
+      alert(`Failed: ${error.response?.data?.detail || error.message}`);
     } finally {
       setCalling({ ...calling, [customerId]: false });
     }
@@ -55,7 +53,7 @@ function CustomerList({ customers, loading, onRefresh }) {
   if (loading) {
     return (
       <div className="card">
-        <h2>📋 Customer List</h2>
+        <h2>Customer List</h2>
         <div className="loading">Loading customers...</div>
       </div>
     );
@@ -64,19 +62,18 @@ function CustomerList({ customers, loading, onRefresh }) {
   return (
     <div className="card">
       <div className="customer-list-header">
-        <h2>📋 Customer List</h2>
+        <h2>Customer List</h2>
         <div className="search-box">
           <input
             type="text"
-            placeholder="Search by name or phone number..."
+            placeholder="Search by name or phone..."
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
             className="search-input"
           />
-          <span className="search-icon">🔍</span>
         </div>
         <div className="customer-count">
-          Showing {filteredCustomers.length} of {customers.length} customers
+          {filteredCustomers.length} of {customers.length}
         </div>
       </div>
 
@@ -109,27 +106,31 @@ function CustomerList({ customers, loading, onRefresh }) {
                   <td>{customer.branch || '-'}</td>
                   <td>
                     {customer.emi
-                      ? `₹${parseFloat(customer.emi).toLocaleString('en-IN')}`
+                      ? `${parseFloat(customer.emi).toLocaleString('en-IN')}`
                       : '-'}
                   </td>
                   <td>{customer.state || '-'}</td>
                   <td>
-                    <button
-                      className="btn btn-success"
-                      onClick={() => handleCall(customer)}
-                      disabled={calling[customer.id]}
-                    >
-                      {calling[customer.id] ? (
-                        <>
-                          <span className="spinner-small"></span>
-                          Calling...
-                        </>
-                      ) : (
-                        <>
-                          📞 Call
-                        </>
-                      )}
-                    </button>
+                    {done[customer.id] ? (
+                      <button className="btn btn-done" disabled>
+                        Done
+                      </button>
+                    ) : (
+                      <button
+                        className="btn btn-success"
+                        onClick={() => handleCall(customer)}
+                        disabled={calling[customer.id]}
+                      >
+                        {calling[customer.id] ? (
+                          <>
+                            <span className="spinner-small"></span>
+                            Calling...
+                          </>
+                        ) : (
+                          'Call'
+                        )}
+                      </button>
+                    )}
                   </td>
                 </tr>
               ))}

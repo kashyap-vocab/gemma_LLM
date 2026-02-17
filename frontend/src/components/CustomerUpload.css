@@ -1,60 +1,59 @@
 .upload-zone {
-  border: 3px dashed #cbd5e1;
-  border-radius: 12px;
-  padding: 3rem;
+  border: 2px dashed #d1d5db;
+  border-radius: 8px;
+  padding: 2rem;
   text-align: center;
   cursor: pointer;
-  transition: all 0.3s ease;
-  background: #f8fafc;
+  transition: all 0.2s ease;
+  background: #f9fafb;
 }
 
 .upload-zone:hover {
-  border-color: #667eea;
-  background: #f1f5f9;
+  border-color: #9ca3af;
+  background: #f3f4f6;
 }
 
 .upload-zone.active {
-  border-color: #667eea;
-  background: #eef2ff;
-  transform: scale(1.02);
+  border-color: #6b7280;
+  background: #f3f4f6;
 }
 
 .upload-zone.uploading {
   cursor: wait;
-  opacity: 0.7;
+  opacity: 0.6;
 }
 
 .upload-content {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 1rem;
+  gap: 0.5rem;
 }
 
 .upload-icon {
-  font-size: 4rem;
-  margin-bottom: 0.5rem;
+  font-size: 2.5rem;
+  margin-bottom: 0.25rem;
 }
 
 .upload-zone p {
-  color: #475569;
-  font-size: 1.1rem;
-  margin: 0.5rem 0;
+  color: #4b5563;
+  font-size: 0.95rem;
+  margin: 0.25rem 0;
 }
 
 .upload-hint {
-  color: #94a3b8;
-  font-size: 0.9rem;
+  color: #9ca3af;
+  font-size: 0.8rem;
 }
 
 .spinner {
-  border: 4px solid #f3f4f6;
-  border-top: 4px solid #667eea;
+  border: 3px solid #e5e7eb;
+  border-top: 3px solid #374151;
   border-radius: 50%;
-  width: 50px;
-  height: 50px;
+  width: 36px;
+  height: 36px;
   animation: spin 1s linear infinite;
-  margin-bottom: 1rem;
+  margin-bottom: 0.5rem;
 }
 
 @keyframes spin {
@@ -63,26 +62,27 @@
 }
 
 .upload-info {
-  margin-top: 2rem;
-  padding-top: 2rem;
-  border-top: 1px solid #e2e8f0;
+  margin-top: 1.25rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid #e5e7eb;
 }
 
 .upload-info h3 {
-  color: #334155;
-  margin-bottom: 1rem;
-  font-size: 1.2rem;
+  color: #374151;
+  margin-bottom: 0.5rem;
+  font-size: 0.95rem;
 }
 
 .upload-info ul {
   list-style: none;
   padding: 0;
-  color: #64748b;
+  color: #6b7280;
+  font-size: 0.85rem;
 }
 
 .upload-info li {
-  padding: 0.5rem 0;
-  border-bottom: 1px solid #f1f5f9;
+  padding: 0.35rem 0;
+  border-bottom: 1px solid #f3f4f6;
 }
 
 .upload-info li:last-child {
