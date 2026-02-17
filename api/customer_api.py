@@ -429,7 +429,17 @@ async def update_call_context(request: CallContextRequest, db: Session = Depends
             api_key=lk_api_key,
             api_secret=lk_api_secret,
         ) as lk:
-            # Create room with agent dispatch in one call
+            # Delete existing room first to avoid stale agent issue
+            # (create_room is idempotent and won't re-dispatch agent to existing room)
+            try:
+                await lk.room.delete_room(
+                    livekit_api.DeleteRoomRequest(room=room_name)
+                )
+                logger.info(f"Deleted existing room '{room_name}' before re-creating")
+            except Exception:
+                pass  # Room didn't exist, that's fine
+
+            # Create fresh room with agent dispatch
             await lk.room.create_room(
                 livekit_api.CreateRoomRequest(
                     name=room_name,

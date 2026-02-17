@@ -173,17 +173,23 @@ async def my_agent(ctx: agents.JobContext):
             ),
         )
 
-        # Transliterate customer name to Devanagari for TTS
+        # Transliterate customer name to Devanagari for TTS (with 5s timeout)
         hindi_name = None
         if customer_name:
             try:
                 client = genai.Client()
-                resp = await client.aio.models.generate_content(
-                    model="gemini-2.0-flash",
-                    contents=f"Convert this Indian name from English to Hindi Devanagari script. Reply with ONLY the Devanagari name, nothing else: {customer_name}",
+                resp = await asyncio.wait_for(
+                    client.aio.models.generate_content(
+                        model="gemini-2.0-flash",
+                        contents=f"Convert this Indian name from English to Hindi Devanagari script. Reply with ONLY the Devanagari name, nothing else: {customer_name}",
+                    ),
+                    timeout=5.0,
                 )
                 hindi_name = resp.text.strip()
                 print(f"📝 Transliterated name: {customer_name} → {hindi_name}")
+            except asyncio.TimeoutError:
+                print(f"⚠️ Transliteration timed out after 5s, using original name")
+                hindi_name = customer_name
             except Exception as e:
                 print(f"⚠️ Transliteration failed, using original: {e}")
                 hindi_name = customer_name
@@ -192,7 +198,15 @@ async def my_agent(ctx: agents.JobContext):
         name_part = f"{hindi_name} जी" if hindi_name else "आप"
         greeting_text = f"नमस्ते, मैं एल एंड टी फाइनेंस की तरफ़ से बात कर रही हूँ। यह कॉल आपके पेमेंट अनुभव को जानने के लिए है। क्या मेरी बात {name_part} से हो रही है?"
         print(f"🗣️ Greeting: {greeting_text}")
-        await session.say(greeting_text, allow_interruptions=True)
+        try:
+            await asyncio.wait_for(
+                session.say(greeting_text, allow_interruptions=True),
+                timeout=15.0,
+            )
+        except asyncio.TimeoutError:
+            print(f"⚠️ Greeting TTS timed out after 15s - session will continue without greeting")
+        except Exception as e:
+            print(f"⚠️ Greeting failed: {e} - session will continue")
 
         # Keep session alive until the room disconnects
         # Without this, the function returns and kills the agent mid-conversation

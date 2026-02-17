@@ -251,79 +251,87 @@ When you learn or confirm any of the above information, store it using the provi
         session["payment"][key] = value
 
     @function_tool()
-    async def store_identity_confirmed(self, status: str) -> None:
+    async def store_identity_confirmed(self, status: str) -> str:
         """
         Store identity confirmation status.
         Args:
             status: YES or NO or NOT_AVAILABLE or SENSITIVE_SITUATION
         """
         self._store("identity_confirmed", status)
+        return f"Stored identity_confirmed={status}. Proceed to next question."
 
     @function_tool()
-    async def store_loan_taken(self, has_loan: bool) -> None:
+    async def store_loan_taken(self, has_loan: bool) -> str:
         """
         Store whether customer has taken a loan.
         Args:
             has_loan: True if customer has loan, False otherwise
         """
         self._store("loan_taken", has_loan)
+        return f"Stored loan_taken={has_loan}. Proceed to next question."
 
     @function_tool()
-    async def store_last_month_payment(self, value: str) -> None:
+    async def store_last_month_payment(self, value: str) -> str:
         """
         Store last month payment status.
         Args:
             value: What the customer said about last month payment
         """
         self._store("last_month_payment", value)
+        return f"Stored last_month_payment={value}. Proceed to next question."
 
     @function_tool()
-    async def store_payee(self, payee: str) -> None:
+    async def store_payee(self, payee: str) -> str:
         """
         Store who made the payment.
         Args:
             payee: self or relative or friend or third_party
         """
         self._store_payment("payee", payee)
+        return f"Stored payee={payee}. Proceed to next question."
 
     @function_tool()
-    async def store_payment_amount(self, amount: str) -> None:
+    async def store_payment_amount(self, amount: str) -> str:
         """
         Store payment amount.
         Args:
             amount: The amount paid, e.g. 5555
         """
         self._store_payment("amount", amount)
+        return f"Stored payment_amount={amount}. Proceed to next question."
 
     @function_tool()
-    async def store_payment_date(self, date: str) -> None:
+    async def store_payment_date(self, date: str) -> str:
         """
         Store payment date.
         Args:
             date: Date of payment in dd-mm-yyyy format
         """
         self._store_payment("date", date)
+        return f"Stored payment_date={date}. Proceed to next question."
 
     @function_tool()
-    async def store_payment_mode(self, mode: str) -> None:
+    async def store_payment_mode(self, mode: str) -> str:
         """
         Store payment mode.
         Args:
             mode: How payment was made, e.g. UPI, cash, online, NACH, branch, field_executive
         """
         self._store_payment("mode", mode)
+        return f"Stored payment_mode={mode}. Proceed to next question."
 
     @function_tool()
-    async def store_payment_reason(self, reason: str) -> None:
+    async def store_payment_reason(self, reason: str) -> str:
         """
         Store payment reason.
         Args:
             reason: Why the payment was made, e.g. EMI, settlement, foreclosure
         """
         self._store_payment("reason", reason)
+        return f"Stored payment_reason={reason}. Proceed to next question."
 
     @function_tool()
-    async def store_payee_details(self, payee_name: str, payee_contact: str = "") -> None:
+    async def store_payee_details(self, payee_name: str, payee_contact: str = "") -> str:
         """
         Store third-party or relative payee name and contact.
         Args:
@@ -333,9 +341,10 @@ When you learn or confirm any of the above information, store it using the provi
         self._store_payment("payee_name", payee_name)
         if payee_contact:
             self._store_payment("payee_contact", payee_contact)
+        return f"Stored payee_details: name={payee_name}, contact={payee_contact}. Proceed to next question."
 
     @function_tool()
-    async def store_field_executive(self, name: str, contact: str = "") -> None:
+    async def store_field_executive(self, name: str, contact: str = "") -> str:
         """
         Store field executive details if payment was made via field executive.
         Args:
@@ -345,16 +354,18 @@ When you learn or confirm any of the above information, store it using the provi
         self._store_payment("field_executive_name", name)
         if contact:
             self._store_payment("field_executive_contact", contact)
+        return f"Stored field_executive: name={name}, contact={contact}. Proceed to next question."
 
     @function_tool()
-    async def complete_survey(self, confirmed: bool) -> None:
+    async def complete_survey(self, confirmed: bool) -> str:
         """
         Call when customer confirms or rejects the summary.
         Args:
             confirmed: True if customer said the summary is correct, False if they want to correct
         """
         if not self._call_id:
-            return
+            return "No call_id available."
         feedback_sessions.setdefault(self._call_id, _default_feedback_session(self._call_id))["confirmed"] = confirmed
         feedback_sessions[self._call_id]["category"] = "COMPLETE_SURVEY"
         asyncio.create_task(persist_feedback_to_db(self._call_id))
+        return f"Survey completed, confirmed={confirmed}. End the call politely."
