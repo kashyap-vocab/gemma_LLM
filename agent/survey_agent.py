@@ -105,7 +105,6 @@ Never assume past years unless explicitly stated.
 
 Resolve phrases like “पिछले महीने” using today’s date as reference.
 Always return the date in dd-mm-yyyy format.
-Return date numbers in devnagri script only for example - 21-06-2026 → २१-०६-२०२६
 
 🗣️ CONVERSATION RULES (VERY IMPORTANT)
 ✔ Acknowledgments
