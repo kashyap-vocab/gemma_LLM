@@ -158,25 +158,6 @@ async def my_agent(ctx: agents.JobContext):
     def on_metrics_collected(ev: MetricsCollectedEvent):
         tracker.on_metrics(ev)
 
-    @session.on("close")
-    def on_close(_event):
-        """Flush all data to DB at session end (single batch)."""
-        async def _flush():
-            # 1. Flush transcripts
-            for role_str, text, speaker_id in transcript_buffer:
-                if role_str == "user":
-                    await store_conversation_turn(call_id, customer_phone, customer_transcript=text, speaker_id=speaker_id)
-                elif role_str == "assistant":
-                    await store_conversation_turn(call_id, customer_phone, agent_transcript=text)
-            # 2. Persist feedback
-            await persist_feedback_to_db(call_id, customer_phone)
-            # 3. Update call status
-            if customer_phone:
-                await update_call_status(customer_phone, "completed")
-            feedback_sessions.pop(call_id, None)
-            print(f"💾 Flushed {len(transcript_buffer)} transcripts + feedback to DB")
-        asyncio.create_task(_flush())
-
     try:
         await session.start(
             room=ctx.room,
@@ -212,9 +193,36 @@ async def my_agent(ctx: agents.JobContext):
         greeting_text = f"नमस्ते, मैं एल एंड टी फाइनेंस की तरफ़ से बात कर रही हूँ। यह कॉल आपके पेमेंट अनुभव को जानने के लिए है। क्या मेरी बात {name_part} से हो रही है?"
         print(f"🗣️ Greeting: {greeting_text}")
         await session.say(greeting_text, allow_interruptions=True)
+
+        # Keep session alive until the room disconnects
+        # Without this, the function returns and kills the agent mid-conversation
+        disconnect_event = asyncio.Event()
+
+        @ctx.room.on("disconnected")
+        def on_room_disconnect():
+            disconnect_event.set()
+
+        await disconnect_event.wait()
+
     finally:
         print("\n\n🛑 Session ending...")
         tracker.print_session_summary()
+
+        # Flush transcripts + feedback to DB (awaited, not fire-and-forget)
+        try:
+            print(f"💾 Flushing {len(transcript_buffer)} transcripts + feedback to DB...")
+            for role_str, text, speaker_id in transcript_buffer:
+                if role_str == "user":
+                    await store_conversation_turn(call_id, customer_phone, customer_transcript=text, speaker_id=speaker_id)
+                elif role_str == "assistant":
+                    await store_conversation_turn(call_id, customer_phone, agent_transcript=text)
+            await persist_feedback_to_db(call_id, customer_phone)
+            if customer_phone:
+                await update_call_status(customer_phone, "completed")
+            feedback_sessions.pop(call_id, None)
+            print(f"💾 Done flushing to DB")
+        except Exception as e:
+            print(f"❌ Error flushing to DB: {e}")
 
 
 if __name__ == "__main__":
