@@ -1,6 +1,4 @@
 import asyncio
-import wave
-from pathlib import Path
 
 from dotenv import load_dotenv
 from google.genai import types
@@ -192,25 +190,11 @@ async def my_agent(ctx: agents.JobContext):
             ),
         )
 
-        audio_path = Path(__file__).parent / "manisha_tts_audio.wav"
-
-        with wave.open(str(audio_path), "rb") as wav_file:
-            num_channels = wav_file.getnchannels()
-            sample_rate = wav_file.getframerate()
-            num_frames = wav_file.getnframes()
-            frames = wav_file.readframes(num_frames)
-
-        audio_frame = rtc.AudioFrame(
-            data=frames,
-            sample_rate=sample_rate,
-            num_channels=num_channels,
-            samples_per_channel=num_frames,
-        )
-
-        async def greeting_audio():
-            yield audio_frame
-
-        await session.say("", audio=greeting_audio(), allow_interruptions=True)
+        # Dynamic greeting with customer name via TTS
+        name_part = f"{customer_name} जी" if customer_name else "आप"
+        greeting_text = f"नमस्ते, मैं एल एंड टी फाइनेंस की तरफ़ से बात कर रही हूँ। यह कॉल आपके पेमेंट अनुभव को जानने के लिए है। क्या मेरी बात {name_part} से हो रही है?"
+        print(f"🗣️ Greeting: {greeting_text}")
+        await session.say(greeting_text, allow_interruptions=True)
     finally:
         print("\n\n🛑 Session ending...")
         tracker.print_session_summary()
