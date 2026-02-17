@@ -140,7 +140,9 @@ async def my_agent(ctx: agents.JobContext):
         preemptive_generation=True,
     )
 
-    # Store conversation transcripts (sync callback, async work via create_task)
+    # Buffer transcripts in memory, flush to DB only at session end
+    transcript_buffer = []
+
     @session.on("conversation_item_added")
     def on_conversation_item_added(event: ConversationItemAddedEvent):
         item = event.item
@@ -149,19 +151,7 @@ async def my_agent(ctx: agents.JobContext):
             return
         role = getattr(item, "role", None)
         role_str = (getattr(role, "value", None) or getattr(role, "name", None) or str(role)).lower()
-        if role_str == "user":
-            asyncio.create_task(store_conversation_turn(
-                call_id,
-                customer_phone,
-                customer_transcript=text,
-                speaker_id=getattr(item, "speaker_id", None),
-            ))
-        elif role_str == "assistant":
-            asyncio.create_task(store_conversation_turn(
-                call_id,
-                customer_phone,
-                agent_transcript=text,
-            ))
+        transcript_buffer.append((role_str, text, getattr(item, "speaker_id", None)))
 
     # Subscribe to official LiveKit metrics
     @session.on("metrics_collected")
@@ -170,11 +160,22 @@ async def my_agent(ctx: agents.JobContext):
 
     @session.on("close")
     def on_close(_event):
-        """Persist feedback data on session end."""
-        asyncio.create_task(persist_feedback_to_db(call_id, customer_phone))
-        if customer_phone:
-            asyncio.create_task(update_call_status(customer_phone, "completed"))
-        feedback_sessions.pop(call_id, None)
+        """Flush all data to DB at session end (single batch)."""
+        async def _flush():
+            # 1. Flush transcripts
+            for role_str, text, speaker_id in transcript_buffer:
+                if role_str == "user":
+                    await store_conversation_turn(call_id, customer_phone, customer_transcript=text, speaker_id=speaker_id)
+                elif role_str == "assistant":
+                    await store_conversation_turn(call_id, customer_phone, agent_transcript=text)
+            # 2. Persist feedback
+            await persist_feedback_to_db(call_id, customer_phone)
+            # 3. Update call status
+            if customer_phone:
+                await update_call_status(customer_phone, "completed")
+            feedback_sessions.pop(call_id, None)
+            print(f"💾 Flushed {len(transcript_buffer)} transcripts + feedback to DB")
+        asyncio.create_task(_flush())
 
     try:
         await session.start(

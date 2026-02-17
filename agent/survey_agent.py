@@ -238,63 +238,58 @@ When you learn or confirm any of the above information, store it using the provi
     @function_tool()
     async def store_identity_confirmed(self, status: str) -> None:
         """
-        Store identity confirmation status. Call when customer confirms or denies identity.
+        Store identity confirmation status.
         Args:
-            status: YES (customer confirmed) / NO (wrong person) / NOT_AVAILABLE (relative answered) / SENSITIVE_SITUATION
+            status: YES or NO or NOT_AVAILABLE or SENSITIVE_SITUATION
         """
         if not self._call_id:
             return
         feedback_sessions.setdefault(self._call_id, _default_feedback_session(self._call_id))["identity_confirmed"] = status
-        asyncio.create_task(persist_feedback_to_db(self._call_id))
 
     @function_tool()
     async def store_loan_taken(self, has_loan: bool) -> None:
         """
-        Store whether customer has taken a loan from एल एंड टी फाइनेंस.
+        Store whether customer has taken a loan.
         Args:
             has_loan: True if customer has loan, False otherwise
         """
         if not self._call_id:
             return
         feedback_sessions.setdefault(self._call_id, _default_feedback_session(self._call_id))["loan_taken"] = has_loan
-        asyncio.create_task(persist_feedback_to_db(self._call_id))
 
     @function_tool()
     async def store_last_month_payment(self, value: str) -> None:
         """
-        Store last month payment status or note (e.g. paid, not paid, partial).
+        Store last month payment status.
         Args:
             value: What the customer said about last month payment
         """
         if not self._call_id:
             return
         feedback_sessions.setdefault(self._call_id, _default_feedback_session(self._call_id))["last_month_payment"] = value
-        asyncio.create_task(persist_feedback_to_db(self._call_id))
 
     @function_tool()
     async def add_payment_detail(self, field: str, value: str) -> None:
         """
-        Add one payment detail or customer name. Call after the customer provides each piece of information.
+        Store one payment detail. Call once per piece of information.
         Args:
-            field: One of amount, date, mode, reason, payee, payee_name, payee_contact, payment_date, payment_mode, payment_reason, payment_amount, field_executive_name, field_executive_contact, customer_name
-            value: The value for that field
+            field: Must be exactly one of: amount, date, mode, reason, payee, payee_name, payee_contact, field_executive_name, field_executive_contact
+            value: The value the customer provided for this field
         """
         if not self._call_id:
             return
         sid = self._call_id
         feedback_sessions.setdefault(sid, _default_feedback_session(sid))
-        if field == "customer_name":
-            feedback_sessions[sid]["customer_name"] = value
-        else:
-            if "payment" not in feedback_sessions[sid]:
-                feedback_sessions[sid]["payment"] = {}
-            feedback_sessions[sid]["payment"][field] = value
-        asyncio.create_task(persist_feedback_to_db(self._call_id))
+        if "payment" not in feedback_sessions[sid]:
+            feedback_sessions[sid]["payment"] = {}
+        # Normalize: strip payment_ prefix if LLM adds it
+        clean_field = field.replace("payment_", "") if field.startswith("payment_") else field
+        feedback_sessions[sid]["payment"][clean_field] = value
 
     @function_tool()
     async def complete_survey(self, confirmed: bool) -> None:
         """
-        Call when customer confirms or rejects the summary. End the call after thanking if confirmed.
+        Call when customer confirms or rejects the summary.
         Args:
             confirmed: True if customer said the summary is correct, False if they want to correct
         """
@@ -302,4 +297,5 @@ When you learn or confirm any of the above information, store it using the provi
             return
         feedback_sessions.setdefault(self._call_id, _default_feedback_session(self._call_id))["confirmed"] = confirmed
         feedback_sessions[self._call_id]["category"] = "COMPLETE_SURVEY"
+        # Only persist to DB here at completion
         asyncio.create_task(persist_feedback_to_db(self._call_id))
