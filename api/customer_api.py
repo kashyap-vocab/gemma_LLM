@@ -162,8 +162,10 @@ async def upload_excel(file: UploadFile = File(...), db: Session = Depends(get_d
                     'branch': row.get('branch') or None,
                     'zone': row.get('zone') or None,
                     'product': row.get('product') or None,
-                    'bkt_grp_may': row.get('bkt_grp_may') or None,
-                    'bkt_grp_june': row.get('bkt_grp_june') or None,
+                    # bkt group fields may contain non-numeric codes like 'X-FC'
+                    # convert to int when possible, otherwise store None to avoid DB type errors
+                    'bkt_grp_may': _to_int(row.get('bkt_grp_may')),
+                    'bkt_grp_june': _to_int(row.get('bkt_grp_june')),
                     'ncm_name': row.get('ncm_name') or None,
                     'agency_code': row.get('agency_code') or None,
                     'agency_name': row.get('agency_name') or None,
@@ -224,6 +226,25 @@ def _to_numeric(value):
         return None
     try:
         return float(value)
+    except (ValueError, TypeError):
+        return None
+
+
+def _to_int(value):
+    """Convert value to int if possible, otherwise return None.
+
+    Many Excel sheets contain codes like 'X-FC' in bucket-group columns that
+    are not integers. When the DB column expects an integer, attempting to
+    insert those strings causes a DB error. Use this helper to coerce numeric
+    values and return None for non-numeric ones.
+    """
+    if pd.isna(value) or value == '' or value is None:
+        return None
+    try:
+        # Some numeric-looking values may be floats (e.g., 3.0) — cast via float
+        # then to int to handle that case.
+        v = float(value)
+        return int(v)
     except (ValueError, TypeError):
         return None
 

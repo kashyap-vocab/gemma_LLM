@@ -430,6 +430,23 @@ async def my_agent(ctx: agents.JobContext):
             ),
         )
 
+        # Debug: log remote participants and their published tracks right after session start
+        try:
+            print("🔎 Remote participants at session start:")
+            for pid, participant in ctx.room.remote_participants.items():
+                try:
+                    pubs = getattr(participant, 'tracks', None) or getattr(participant, 'published_tracks', None) or []
+                    track_info = []
+                    for t in pubs:
+                        try:
+                            track_info.append(f"{getattr(t, 'name', getattr(t, 'sid', 'unknown'))}:{getattr(t, 'kind', 'unknown')}")
+                        except Exception:
+                            pass
+                    print(f" - {participant.identity} ({participant.sid}) tracks={track_info}")
+                except Exception:
+                    print(f" - {participant} (could not list tracks)")
+        except Exception as e:
+            print(f"Warning: could not enumerate remote participants: {e}")
         # Transliterate customer name to Devanagari for TTS (with 5s timeout)
         hindi_name = None
         if customer_name:
