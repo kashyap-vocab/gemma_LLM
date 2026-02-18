@@ -1,9 +1,23 @@
 services:
-  voice-agent:
-    image: gcr.io/YOUR_PROJECT/voice-agent:latest
-    container_name: voice-agent
+  api:
+    image: dronavocab/livekit-flow:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: livekit-api
+    command: ["python", "-m", "api.main"]
+    env_file:
+      - .env
     ports:
-      - "8319:8319"
-    restart: always
-    environment:
-      - ENV=production
+      - "8000:8000"
+    restart: unless-stopped
+
+  agent:
+    image: dronavocab/livekit-flow:latest
+    container_name: livekit-agent
+    command: ["python", "agent/web_rtc_server.py", "dev"]
+    env_file:
+      - .env
+    restart: unless-stopped
+    depends_on:
+      - api
