@@ -2,6 +2,10 @@ import asyncio
 from livekit.agents import Agent, function_tool
 from db_storage import feedback_sessions, _default_feedback_session, persist_feedback_to_db
 
+# Shared signals: when complete_survey() is called, the event is set
+# so that web_rtc_server can detect it and trigger a hangup via the bridge.
+call_end_signals: dict[str, asyncio.Event] = {}
+
 
 class SurveyAssistant(Agent):
     def __init__(self, call_id: str = None, customer_name: str = None) -> None:
@@ -367,4 +371,11 @@ When you learn or confirm any of the above information, store it using the provi
         feedback_sessions.setdefault(self._call_id, _default_feedback_session(self._call_id))["confirmed"] = confirmed
         feedback_sessions[self._call_id]["category"] = "COMPLETE_SURVEY"
         asyncio.create_task(persist_feedback_to_db(self._call_id))
+
+        # Signal that the call should end after the closing statement is spoken
+        end_signal = call_end_signals.get(self._call_id)
+        if end_signal:
+            end_signal.set()
+            print(f"[AGENT] 📴 Call end signal set for {self._call_id}")
+
         return f"Survey completed, confirmed={confirmed}. End the call politely."

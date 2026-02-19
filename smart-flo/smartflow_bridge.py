@@ -52,6 +52,7 @@ class SmartfloLiveKitBridge:
         self.ws = None
         self.chunk_counter = 1
         self.sequence_number = 1
+        self._hangup_requested = False
 
     @staticmethod
     def _resolve_customer_phone(from_number: str = None, to_number: str = None) -> str:
@@ -105,6 +106,17 @@ class SmartfloLiveKitBridge:
             if track.kind == rtc.TrackKind.KIND_AUDIO:
                 asyncio.create_task(self.forward_livekit_to_smartflo(track))
 
+        @self.room.on("data_received")
+        def on_data_received(data: rtc.DataPacket):
+            try:
+                payload = json.loads(data.data.decode("utf-8"))
+                if payload.get("action") == "hangup":
+                    print(f"[BRIDGE] 📴 Received hangup signal from agent, disconnecting...")
+                    self._hangup_requested = True
+                    asyncio.create_task(self._handle_hangup())
+            except Exception as e:
+                pass  # Ignore non-JSON data messages
+
         print(f"[BRIDGE] Connecting to LiveKit room: {self.room_name} at {LIVEKIT_URL}")
         await self.room.connect(LIVEKIT_URL, token.to_jwt())
         print(f"[BRIDGE] ✅ Connected to LiveKit room: {self.room_name}")
@@ -121,6 +133,22 @@ class SmartfloLiveKitBridge:
 
         await self.room.local_participant.publish_track(self.audio_track, options)
         print("[BRIDGE] 🎤 Published audio track to LiveKit")
+
+    async def _handle_hangup(self):
+        """Disconnect the SmartFlo WebSocket and LiveKit room after agent signals hangup."""
+        try:
+            # Close the SmartFlo WebSocket — this ends the telephony leg
+            if self.ws:
+                await self.ws.close()
+                print(f"[BRIDGE] 📴 SmartFlo WebSocket closed")
+        except Exception as e:
+            print(f"[BRIDGE] ⚠️ Error closing SmartFlo WebSocket: {e}")
+        try:
+            if self.room:
+                await self.room.disconnect()
+                print(f"[BRIDGE] 📴 LiveKit room disconnected")
+        except Exception as e:
+            print(f"[BRIDGE] ⚠️ Error disconnecting LiveKit room: {e}")
 
     async def send_smartflo_audio_to_livekit(self, audio_payload: str):
         """Convert Smartflo mulaw audio to PCM and send to LiveKit"""

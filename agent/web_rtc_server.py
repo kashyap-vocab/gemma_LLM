@@ -267,7 +267,7 @@ from livekit.plugins import sarvam
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
 from metrics import MetricsTracker
-from survey_agent import SurveyAssistant
+from survey_agent import SurveyAssistant, call_end_signals
 
 load_dotenv()
 
@@ -482,6 +482,24 @@ async def my_agent(ctx: agents.JobContext):
         except Exception as e:
             print(f"⚠️ Greeting failed: {e} - session will continue")
 
+        # Register a call-end signal so complete_survey() can trigger hangup
+        call_end_signals[call_id] = asyncio.Event()
+
+        async def _wait_and_signal_hangup():
+            """Wait for complete_survey() signal, then tell the bridge to hang up."""
+            await call_end_signals[call_id].wait()
+            print(f"[AGENT] 📴 Call end signal received for {call_id}, waiting 3s for TTS to finish...")
+            await asyncio.sleep(3)  # Allow closing statement TTS to finish playing
+            try:
+                import json as _j
+                hangup_msg = _j.dumps({"action": "hangup"}).encode("utf-8")
+                await ctx.room.local_participant.publish_data(hangup_msg, reliable=True)
+                print(f"[AGENT] 📴 Hangup data message sent to room {call_id}")
+            except Exception as e:
+                print(f"[AGENT] ❌ Failed to send hangup data message: {e}")
+
+        asyncio.create_task(_wait_and_signal_hangup())
+
         # Keep session alive until the room disconnects
         # Without this, the function returns and kills the agent mid-conversation
         disconnect_event = asyncio.Event()
@@ -493,6 +511,9 @@ async def my_agent(ctx: agents.JobContext):
         await disconnect_event.wait()
 
     finally:
+        # Clean up call-end signal
+        call_end_signals.pop(call_id, None)
+
         print("\n\n🛑 Session ending...")
         tracker.print_session_summary()
 
