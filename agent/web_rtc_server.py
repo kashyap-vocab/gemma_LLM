@@ -253,8 +253,8 @@ async def my_agent(ctx: agents.JobContext):
         async def _wait_and_signal_hangup():
             """Wait for complete_survey() signal, then tell the bridge to hang up."""
             await call_end_signals[call_id].wait()
-            print(f"[AGENT] 📴 Call end signal received for {call_id}, waiting 3s for TTS to finish...")
-            await asyncio.sleep(5)  # Allow closing statement TTS to play
+            print(f"[AGENT] 📴 Call end signal received for {call_id}, waiting 1.5s for TTS to finish...")
+            await asyncio.sleep(1.5)  # Allow closing statement TTS to play
             try:
                 import json as _j
                 hangup_msg = _j.dumps({"action": "hangup"}).encode("utf-8")
@@ -282,29 +282,31 @@ async def my_agent(ctx: agents.JobContext):
         print("\n\n🛑 Session ending...")
         tracker.print_session_summary()
 
-        # Flush transcripts + feedback to DB (use synchronous operations to avoid executor shutdown issues)
+        # Always update call status first so the auto-dialer can advance immediately,
+        # even if transcript storage fails below.
+        if customer_phone:
+            try:
+                from db_storage import _update_call_status_sync
+                _update_call_status_sync(customer_phone, "completed")
+            except Exception as e:
+                print(f"❌ Error updating call status: {e}")
+
+        # Flush transcripts + feedback to DB
         try:
             print(f"💾 Flushing {len(transcript_buffer)} transcripts + feedback to DB...")
             print(f"📋 Transcript buffer contents:")
             for idx, (role_str, text, speaker_id) in enumerate(transcript_buffer):
                 print(f"   {idx+1}. [{role_str}] {text[:60]}...")
-            
-            # Import synchronous functions to avoid executor shutdown issues
+
             from db_storage import _store_conversation_turn_sync, _persist_feedback_to_db_sync
-            
-            # Use synchronous operations directly
+
             for role_str, text, speaker_id in transcript_buffer:
                 if role_str == "user":
                     _store_conversation_turn_sync(call_id, customer_phone, customer_transcript=text, agent_transcript=None, speaker_id=speaker_id, language="hi")
                 elif role_str == "assistant":
                     _store_conversation_turn_sync(call_id, customer_phone, customer_transcript=None, agent_transcript=text, speaker_id=None, language="hi")
-            
+
             _persist_feedback_to_db_sync(call_id, customer_phone)
-            
-            if customer_phone:
-                from db_storage import _update_call_status_sync
-                _update_call_status_sync(customer_phone, "completed")
-            
             feedback_sessions.pop(call_id, None)
             print(f"💾 Done flushing to DB - {len(transcript_buffer)} turns saved")
         except Exception as e:

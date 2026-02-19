@@ -19,6 +19,9 @@ import uvicorn
 # Import customer API router
 from api.customer_api import router as customer_router
 
+# Import auto-dialer router
+from api.auto_dialer import router as auto_dialer_router
+
 # Import Smartflo bridge WebSocket handler
 from smartflow_bridge import smartflo_websocket_endpoint
 
@@ -36,6 +39,9 @@ app.add_middleware(
 
 # Include customer API routes
 app.include_router(customer_router, prefix="/api", tags=["customers"])
+
+# Include auto-dialer routes
+app.include_router(auto_dialer_router, prefix="/api", tags=["auto-dialer"])
 
 # Add WebSocket endpoint for Smartflo bridge
 app.add_websocket_route("/smartflo/stream", smartflo_websocket_endpoint)

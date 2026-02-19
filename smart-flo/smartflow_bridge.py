@@ -9,6 +9,29 @@ import audioop
 
 load_dotenv()
 
+
+def _set_call_status_active(customer_phone: str) -> None:
+    """Update active_call_context.call_status to 'active' when call is answered."""
+    database_url = os.getenv("DATABASE_URL")
+    if not database_url or not customer_phone:
+        return
+    try:
+        import psycopg2
+        conn = psycopg2.connect(database_url)
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE active_call_context SET call_status = 'active', updated_at = NOW() "
+                    "WHERE phone_number = %s",
+                    (customer_phone,),
+                )
+            conn.commit()
+            print(f"[BRIDGE] 📞 call_status → 'active' for {customer_phone}")
+        finally:
+            conn.close()
+    except Exception as e:
+        print(f"[BRIDGE] ⚠️ Could not set call_status active: {e}")
+
 app = FastAPI()
 
 LIVEKIT_URL = os.getenv('LIVEKIT_URL')
@@ -245,6 +268,10 @@ async def smartflo_websocket_endpoint(websocket: WebSocket):
                 )
                 bridge.ws = websocket
                 await bridge.setup_livekit()
+
+                # Mark call as 'active' so the auto-dialer poller knows the
+                # call was answered and stops the unanswered-timeout counter.
+                _set_call_status_active(bridge.customer_phone)
 
             elif event == "media":
                 # Incoming audio from caller
