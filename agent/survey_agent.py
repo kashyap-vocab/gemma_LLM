@@ -235,6 +235,17 @@ Never use English script.
 Never argue or pressure.
 
 When you learn or confirm any of the above information, store it using the provided tools: store_identity_confirmed, store_loan_taken, store_last_month_payment, store_payee, store_payment_amount, store_payment_date, store_payment_mode, store_payment_reason, store_payee_details, store_field_executive, and complete_survey when the customer confirms the summary.
+
+📴 CALL ENDING (MANDATORY)
+After you say your final closing statement (e.g., "धन्यवाद, आपका दिन शुभ हो"), you MUST call end_call() to disconnect the phone call.
+Call end_call() in ALL scenarios where the conversation is over:
+- Survey completed and confirmed
+- Customer is busy / not available
+- Customer refused to talk
+- Sensitive situation (death/illness)
+- Customer asked to call back later
+- Any other reason the call should end
+NEVER forget to call end_call() — without it the phone line stays open forever.
             """ + name_hint,
         )
 
@@ -372,10 +383,24 @@ When you learn or confirm any of the above information, store it using the provi
         feedback_sessions[self._call_id]["category"] = "COMPLETE_SURVEY"
         asyncio.create_task(persist_feedback_to_db(self._call_id))
 
-        # Signal that the call should end after the closing statement is spoken
-        end_signal = call_end_signals.get(self._call_id)
-        if end_signal:
-            end_signal.set()
-            print(f"[AGENT] 📴 Call end signal set for {self._call_id}")
+        # NOTE: We do NOT set the call_end_signal here because the LLM still
+        # needs to generate the closing statement and TTS needs to play it.
+        # The signal is set from web_rtc_server.py's conversation_item_added
+        # handler once the closing assistant message is committed.
 
-        return f"Survey completed, confirmed={confirmed}. End the call politely."
+        return f"Survey completed, confirmed={confirmed}. End the call politely, then call end_call()."
+
+    @function_tool()
+    async def end_call(self) -> str:
+        """
+        Call this AFTER you have said your final closing statement to disconnect the phone call.
+        Must be called in every scenario where the conversation is ending.
+        """
+        if not self._call_id:
+            return "No call_id available."
+        end_signal = call_end_signals.get(self._call_id)
+        if end_signal and not end_signal.is_set():
+            end_signal.set()
+            print(f"[AGENT] 📴 end_call() invoked by LLM for {self._call_id}")
+            return "Call end signal sent. The phone line will disconnect shortly."
+        return "Call end signal already sent or not available."
