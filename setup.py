@@ -11,6 +11,7 @@ extensions = [
     Extension("agent.metrics", ["agent/metrics.py"]),
     Extension("agent.db_storage", ["agent/db_storage.py"]),
     Extension("agent.survey_agent", ["agent/survey_agent.py"]),
+    Extension("agent.web_rtc_server", ["agent/web_rtc_server.py"]),
     Extension("smartflow_bridge", ["smart-flo/smartflow_bridge.py"]),
 ]
 

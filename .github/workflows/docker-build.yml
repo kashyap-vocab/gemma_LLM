@@ -1,4 +1,4 @@
-name: Build and Push Obfuscated Docker Image
+name: Build and Push Docker Image
 
 on:
   push:
@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 env:
-  IMAGE_NAME: voice-agent
+  IMAGE_NAME: ltfs-agent-pl
 
 jobs:
   build-and-push:
@@ -26,7 +26,7 @@ jobs:
           username: ${{ secrets.DOCKER_HUB_USERNAME }}
           password: ${{ secrets.DOCKER_HUB_PASSWORD }}
 
-      - name: Build and push Cython-obfuscated Docker image
+      - name: Build and push Cython Docker image
         uses: docker/build-push-action@v5
         with:
           context: .
@@ -35,8 +35,7 @@ jobs:
           no-cache: false
           tags: |
             ${{ secrets.DOCKER_HUB_USERNAME }}/$IMAGE_NAME:latest
-            ${{ secrets.DOCKER_HUB_USERNAME }}/$IMAGE_0o
-            NAME:${{ github.sha }}
+            ${{ secrets.DOCKER_HUB_USERNAME }}/$IMAGE_NAME:${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
           platforms: linux/amd64
@@ -48,5 +47,5 @@ jobs:
           username: ${{ secrets.DOCKER_HUB_USERNAME }}
           password: ${{ secrets.DOCKER_HUB_PASSWORD }}
           repository: ${{ secrets.DOCKER_HUB_USERNAME }}/$IMAGE_NAME
-          short-description: Obfuscated Cython build for client deployment
+          short-description: Cython build for client deployment
           readme-filepath: ./README.md

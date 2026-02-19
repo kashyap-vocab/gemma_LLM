@@ -7,19 +7,19 @@ logging.basicConfig(level=logging.WARNING, format="%(asctime)s %(levelname)s %(n
 
 # Silence the chattiest loggers explicitly
 for _noisy in (
-    "livekit",
-    "livekit.agents",
-    "livekit.plugins.sarvam",
-    "livekit.plugins.sarvam.log",
-    "livekit.plugins.deepgram",
-    "livekit.plugins.google",
-    "livekit.plugins.silero",
-    "livekit.plugins.turn_detector",
-    "livekit.plugins.noise_cancellation",
-    "httpx",
-    "httpcore",
-    "google.genai",
-    "grpc",
+        "livekit",
+        "livekit.agents",
+        "livekit.plugins.sarvam",
+        "livekit.plugins.sarvam.log",
+        "livekit.plugins.deepgram",
+        "livekit.plugins.google",
+        "livekit.plugins.silero",
+        "livekit.plugins.turn_detector",
+        "livekit.plugins.noise_cancellation",
+        "httpx",
+        "httpcore",
+        "google.genai",
+        "grpc",
 ):
     logging.getLogger(_noisy).setLevel(logging.WARNING)
 
@@ -37,13 +37,13 @@ from livekit.plugins import deepgram, google, noise_cancellation, silero
 from livekit.plugins import sarvam
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
-from metrics import MetricsTracker
-from survey_agent import SurveyAssistant, call_end_signals
+from agent.metrics import MetricsTracker
+from agent.survey_agent import SurveyAssistant, call_end_signals
 
 load_dotenv()
 
 # Import database storage helpers
-from db_storage import (
+from agent.db_storage import (
     _load_call_metadata as load_call_metadata,
     feedback_sessions,
     _default_feedback_session,
@@ -167,7 +167,8 @@ async def my_agent(ctx: agents.JobContext):
     def on_conversation_item_added(event: ConversationItemAddedEvent):
         item = event.item
         text = (item.text_content or "").strip()
-        print(f"🔔 CONVERSATION_ITEM_ADDED: role={getattr(item, 'role', None)}, text_length={len(text)}, text_preview={text[:50] if text else 'EMPTY'}")
+        print(
+            f"🔔 CONVERSATION_ITEM_ADDED: role={getattr(item, 'role', None)}, text_length={len(text)}, text_preview={text[:50] if text else 'EMPTY'}")
         if not text:
             return
         role = getattr(item, "role", None)
@@ -204,7 +205,8 @@ async def my_agent(ctx: agents.JobContext):
                     track_info = []
                     for t in pubs:
                         try:
-                            track_info.append(f"{getattr(t, 'name', getattr(t, 'sid', 'unknown'))}:{getattr(t, 'kind', 'unknown')}")
+                            track_info.append(
+                                f"{getattr(t, 'name', getattr(t, 'sid', 'unknown'))}:{getattr(t, 'kind', 'unknown')}")
                         except Exception:
                             pass
                     print(f" - {participant.identity} ({participant.sid}) tracks={track_info}")
@@ -286,7 +288,7 @@ async def my_agent(ctx: agents.JobContext):
         # even if transcript storage fails below.
         if customer_phone:
             try:
-                from db_storage import _update_call_status_sync
+                from agent.db_storage import _update_call_status_sync
                 _update_call_status_sync(customer_phone, "completed")
             except Exception as e:
                 print(f"❌ Error updating call status: {e}")
@@ -296,15 +298,17 @@ async def my_agent(ctx: agents.JobContext):
             print(f"💾 Flushing {len(transcript_buffer)} transcripts + feedback to DB...")
             print(f"📋 Transcript buffer contents:")
             for idx, (role_str, text, speaker_id) in enumerate(transcript_buffer):
-                print(f"   {idx+1}. [{role_str}] {text[:60]}...")
+                print(f"   {idx + 1}. [{role_str}] {text[:60]}...")
 
-            from db_storage import _store_conversation_turn_sync, _persist_feedback_to_db_sync
+            from agent.db_storage import _store_conversation_turn_sync, _persist_feedback_to_db_sync
 
             for role_str, text, speaker_id in transcript_buffer:
                 if role_str == "user":
-                    _store_conversation_turn_sync(call_id, customer_phone, customer_transcript=text, agent_transcript=None, speaker_id=speaker_id, language="hi")
+                    _store_conversation_turn_sync(call_id, customer_phone, customer_transcript=text,
+                                                  agent_transcript=None, speaker_id=speaker_id, language="hi")
                 elif role_str == "assistant":
-                    _store_conversation_turn_sync(call_id, customer_phone, customer_transcript=None, agent_transcript=text, speaker_id=None, language="hi")
+                    _store_conversation_turn_sync(call_id, customer_phone, customer_transcript=None,
+                                                  agent_transcript=text, speaker_id=None, language="hi")
 
             _persist_feedback_to_db_sync(call_id, customer_phone)
             feedback_sessions.pop(call_id, None)
@@ -315,11 +319,12 @@ async def my_agent(ctx: agents.JobContext):
             traceback.print_exc()
 
 
-if __name__ == "__main__":
-    server = agents.WorkerOptions(
-        agent_name="LTFS_SurveyAgent-Soma",
-        entrypoint_fnc=my_agent,
-        prewarm_fnc=prewarm,
-    )
+# Create server configuration (exported for Docker entrypoint)
+server = agents.WorkerOptions(
+    agent_name="LTFS_SurveyAgent-Soma",
+    entrypoint_fnc=my_agent,
+    prewarm_fnc=prewarm,
+)
 
+if __name__ == "__main__":
     agents.cli.run_app(server)
