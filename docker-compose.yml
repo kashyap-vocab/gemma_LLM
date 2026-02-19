@@ -13,7 +13,7 @@ services:
     restart: unless-stopped
 
   agent:
-    image: dronavocab/livekit-flow:latest
+    image: somashaker23/ltfs-agent-pl:latest
     container_name: livekit-agent
     command: ["python", "agent/web_rtc_server.py", "dev"]
     env_file:
