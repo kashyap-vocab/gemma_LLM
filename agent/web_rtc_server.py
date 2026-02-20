@@ -1,5 +1,13 @@
 import asyncio
 import logging
+import sys
+from pathlib import Path
+
+# Ensure project root is on sys.path so 'from agent.xxx import' always works,
+# regardless of which directory the script is launched from.
+_project_root = Path(__file__).parent.parent
+if str(_project_root) not in sys.path:
+    sys.path.insert(0, str(_project_root))
 
 # ── Logging configuration ────────────────────────────────────────────────
 # Suppress noisy third-party DEBUG/INFO logs so our prints are visible.
@@ -47,6 +55,7 @@ from agent.db_storage import (
     _load_call_metadata as load_call_metadata,
     feedback_sessions,
     _default_feedback_session,
+    store_conversation_turn,          # ← real-time per-turn async writer
 )
 
 
@@ -71,15 +80,12 @@ def prewarm(proc: agents.JobProcess):
     )
     print("✅ LLM prewarmed")
 
-    proc.userdata["tts"] = sarvam.TTS(
-        target_language_code="hi-IN",
-        speaker="simran",
-        model="bulbul:v3",
-        pace=1.0,
-        pitch=0.0,
-        loudness=1.0,
-    )
-    print("✅ TTS prewarmed")
+    # NOTE: sarvam.TTS is intentionally NOT prewarmed/shared here.
+    # It holds a stateful WebSocket connection internally. Sharing one TTS
+    # instance across concurrent sessions causes 'Cannot write to closing
+    # transport' errors when any session ends and closes that shared socket.
+    # Each session creates its own TTS instance in my_agent() below.
+    print("ℹ️  TTS will be created per-session (not shared)")
 
 
 # ============================================================================
@@ -148,19 +154,32 @@ async def my_agent(ctx: agents.JobContext):
         print(f"⚠️ No customer name found - agent will proceed without personalization")
     print()
 
-    # Use prewarmed models
+    # Use prewarmed models — VAD, STT, LLM are safely shareable.
+    # TTS gets a fresh instance per session: sarvam.TTS holds a stateful
+    # WebSocket connection. Sharing it across concurrent sessions causes
+    # 'Cannot write to closing transport' errors when any one session ends.
+    session_tts = sarvam.TTS(
+        target_language_code="hi-IN",
+        speaker="simran",
+        model="bulbul:v3",
+        pace=1.0,
+        pitch=0.0,
+        loudness=1.0,
+    )
+
     session = AgentSession(
         turn_detection=MultilingualModel(),
         min_endpointing_delay=0.1,
         max_endpointing_delay=0.4,
         stt=ctx.proc.userdata["stt"],
         llm=ctx.proc.userdata["llm"],
-        tts=ctx.proc.userdata["tts"],
+        tts=session_tts,
         vad=ctx.proc.userdata["vad"],
         preemptive_generation=True,
     )
 
-    # Buffer transcripts in memory, flush to DB only at session end
+    # Buffer transcripts in memory for logging; each turn is ALSO written to DB
+    # immediately (real-time) so no data is lost if the server crashes mid-call.
     transcript_buffer = []
 
     @session.on("conversation_item_added")
@@ -171,10 +190,40 @@ async def my_agent(ctx: agents.JobContext):
             f"🔔 CONVERSATION_ITEM_ADDED: role={getattr(item, 'role', None)}, text_length={len(text)}, text_preview={text[:50] if text else 'EMPTY'}")
         if not text:
             return
+
         role = getattr(item, "role", None)
         role_str = (getattr(role, "value", None) or getattr(role, "name", None) or str(role)).lower()
-        transcript_buffer.append((role_str, text, getattr(item, "speaker_id", None)))
-        print(f"📝 Buffered {len(transcript_buffer)} items. Latest: [{role_str}] {text[:30]}...")
+        speaker_id = getattr(item, "speaker_id", None)
+
+        # Keep buffer for end-of-call logging
+        transcript_buffer.append((role_str, text, speaker_id))
+        print(f"📝 [{len(transcript_buffer)}] Real-time saving [{role_str}]: {text[:50]}...")
+
+        # ── Real-time DB write ───────────────────────────────────────────────
+        # asyncio.ensure_future() schedules the async coroutine on the running
+        # event loop without blocking the sync event handler.
+        if role_str == "user":
+            asyncio.ensure_future(
+                store_conversation_turn(
+                    call_id,
+                    customer_phone,
+                    customer_transcript=text,
+                    agent_transcript=None,
+                    speaker_id=speaker_id,
+                    language="hi",
+                )
+            )
+        elif role_str == "assistant":
+            asyncio.ensure_future(
+                store_conversation_turn(
+                    call_id,
+                    customer_phone,
+                    customer_transcript=None,
+                    agent_transcript=text,
+                    speaker_id=None,
+                    language="hi",
+                )
+            )
 
     # Subscribe to official LiveKit metrics
     @session.on("metrics_collected")
@@ -293,37 +342,41 @@ async def my_agent(ctx: agents.JobContext):
             except Exception as e:
                 print(f"❌ Error updating call status: {e}")
 
-        # Flush transcripts + feedback to DB
+        # Transcripts were already written to DB in real-time during the call.
+        # Here we only need to:
+        #   1. Log the full buffer for debugging
+        #   2. Persist the final feedback/survey data
         try:
-            print(f"💾 Flushing {len(transcript_buffer)} transcripts + feedback to DB...")
-            print(f"📋 Transcript buffer contents:")
+            print(f"💾 Call ended — {len(transcript_buffer)} turns were saved in real-time during call.")
+            print(f"📋 Transcript summary:")
             for idx, (role_str, text, speaker_id) in enumerate(transcript_buffer):
                 print(f"   {idx + 1}. [{role_str}] {text[:60]}...")
 
-            from agent.db_storage import _store_conversation_turn_sync, _persist_feedback_to_db_sync
+            from agent.db_storage import _persist_feedback_to_db_sync
 
-            for role_str, text, speaker_id in transcript_buffer:
-                if role_str == "user":
-                    _store_conversation_turn_sync(call_id, customer_phone, customer_transcript=text,
-                                                  agent_transcript=None, speaker_id=speaker_id, language="hi")
-                elif role_str == "assistant":
-                    _store_conversation_turn_sync(call_id, customer_phone, customer_transcript=None,
-                                                  agent_transcript=text, speaker_id=None, language="hi")
-
+            # Persist structured feedback (identity, payment details, confirmation)
             _persist_feedback_to_db_sync(call_id, customer_phone)
             feedback_sessions.pop(call_id, None)
-            print(f"💾 Done flushing to DB - {len(transcript_buffer)} turns saved")
+            print(f"💾 Feedback data saved for call_id={call_id}")
         except Exception as e:
-            print(f"❌ Error flushing to DB: {e}")
+            print(f"❌ Error saving feedback to DB: {e}")
             import traceback
             traceback.print_exc()
 
 
-# Create server configuration (exported for Docker entrypoint)
+# ---------------------------------------------------------------------------
+# Server configuration — exported for Docker entrypoint and start.sh
+# ---------------------------------------------------------------------------
+# num_idle_processes=4  → keep 4 pre-warmed agent processes ready at all times
+#                          so all 4 concurrent calls are accepted with zero
+#                          cold-start latency (VAD/STT/LLM/TTS already loaded).
+# Each LiveKit room gets its own process slot; the semaphore in auto_dialer.py
+# (CONCURRENCY=4) ensures we never dispatch more than 4 rooms simultaneously.
 server = agents.WorkerOptions(
     agent_name="LTFS_SurveyAgent-Soma",
     entrypoint_fnc=my_agent,
     prewarm_fnc=prewarm,
+    num_idle_processes=4,   # pre-warm 4 slots = 4 simultaneous calls, zero latency
 )
 
 if __name__ == "__main__":

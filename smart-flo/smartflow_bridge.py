@@ -37,7 +37,11 @@ app = FastAPI()
 LIVEKIT_URL = os.getenv('LIVEKIT_URL')
 LIVEKIT_API_KEY = os.getenv('LIVEKIT_API_KEY')
 LIVEKIT_API_SECRET = os.getenv('LIVEKIT_API_SECRET')
-SMARTFLO_FROM_NUMBER = os.getenv('SMARTFLO_FROM_NUMBER', '')
+# Support both SMARTFLO_FROM_NUMBER and SMARTFLO_PHONE_NUMBER (fallback)
+SMARTFLO_FROM_NUMBER = (
+    os.getenv('SMARTFLO_FROM_NUMBER') or
+    os.getenv('SMARTFLO_PHONE_NUMBER', '')
+)
 
 
 def normalize_phone(number: str) -> str:
@@ -75,7 +79,12 @@ class SmartfloLiveKitBridge:
         self.ws = None
         self.chunk_counter = 1
         self.sequence_number = 1
-        self._hangup_requested = False
+
+        # --- Lifecycle flag ---------------------------------------------------
+        # Set to True as soon as we want the forwarding loop to stop.
+        # This is checked in forward_livekit_to_smartflo() so it exits cleanly
+        # instead of crashing with "send after close" errors.
+        self._closed = asyncio.Event()
 
     @staticmethod
     def _resolve_customer_phone(from_number: str = None, to_number: str = None) -> str:
@@ -135,9 +144,12 @@ class SmartfloLiveKitBridge:
                 payload = json.loads(data.data.decode("utf-8"))
                 if payload.get("action") == "hangup":
                     print(f"[BRIDGE] 📴 Received hangup signal from agent, disconnecting...")
-                    self._hangup_requested = True
-                    asyncio.create_task(self._handle_hangup())
-            except Exception as e:
+                    # Signal the main loop to exit cleanly — do NOT call ws.close()
+                    # from here. The WebSocket must be closed by its own handler task
+                    # (smartflo_websocket_endpoint) to avoid the Starlette
+                    # "WebSocket is not connected" / "accept first" errors.
+                    self._closed.set()
+            except Exception:
                 pass  # Ignore non-JSON data messages
 
         print(f"[BRIDGE] Connecting to LiveKit room: {self.room_name} at {LIVEKIT_URL}")
@@ -157,15 +169,9 @@ class SmartfloLiveKitBridge:
         await self.room.local_participant.publish_track(self.audio_track, options)
         print("[BRIDGE] 🎤 Published audio track to LiveKit")
 
-    async def _handle_hangup(self):
-        """Disconnect the SmartFlo WebSocket and LiveKit room after agent signals hangup."""
-        try:
-            # Close the SmartFlo WebSocket — this ends the telephony leg
-            if self.ws:
-                await self.ws.close()
-                print(f"[BRIDGE] 📴 SmartFlo WebSocket closed")
-        except Exception as e:
-            print(f"[BRIDGE] ⚠️ Error closing SmartFlo WebSocket: {e}")
+    async def teardown(self):
+        """Disconnect LiveKit room cleanly. Safe to call multiple times."""
+        self._closed.set()  # stop the audio forwarding loop
         try:
             if self.room:
                 await self.room.disconnect()
@@ -198,8 +204,11 @@ class SmartfloLiveKitBridge:
             print(f"[BRIDGE] ❌ Error processing audio: {e}")
 
     async def forward_livekit_to_smartflo(self, track: rtc.AudioTrack):
-        """Forward audio from LiveKit agent back to Smartflo"""
+        """Forward audio from LiveKit agent back to Smartflo.
 
+        Exits cleanly as soon as self._closed is set (hangup or disconnect)
+        instead of crashing with WebSocketDisconnect / 'send after close'.
+        """
         audio_stream = rtc.AudioStream(
             track=track,
             sample_rate=8000,
@@ -208,21 +217,27 @@ class SmartfloLiveKitBridge:
         )
 
         async for event in audio_stream:
+            # Stop the loop as soon as the call is over
+            if self._closed.is_set():
+                break
+
             frame = event.frame
             pcm = frame.data.tobytes()  # already 8kHz PCM16
-
             mulaw = audioop.lin2ulaw(pcm, 2)
 
-            await self.ws.send_json({
-                "event": "media",
-                "streamSid": self.stream_sid,
-                "media": {
-                    "payload": base64.b64encode(mulaw).decode(),
-                    "chunk": self.chunk_counter,
-                }
-            })
-
-            self.chunk_counter += 1
+            try:
+                await self.ws.send_json({
+                    "event": "media",
+                    "streamSid": self.stream_sid,
+                    "media": {
+                        "payload": base64.b64encode(mulaw).decode(),
+                        "chunk": self.chunk_counter,
+                    }
+                })
+                self.chunk_counter += 1
+            except Exception:
+                # WebSocket closed — stop forwarding silently
+                break
 
 
 @app.websocket("/smartflo/stream")
@@ -236,7 +251,28 @@ async def smartflo_websocket_endpoint(websocket: WebSocket):
 
     try:
         while True:
-            message = await websocket.receive_text()
+            # --- Check if the agent signalled a hangup ----------------------
+            # We do this at the top of the loop so we exit before trying to
+            # receive from the (about-to-be-closed) socket.
+            if bridge and bridge._closed.is_set():
+                print("[BRIDGE] 📴 Hangup signal received — closing WebSocket")
+                break
+
+            # Receive next message with a short timeout so we can check the
+            # hangup flag even when SmartFlo is not sending data.
+            try:
+                message = await asyncio.wait_for(
+                    websocket.receive_text(),
+                    timeout=0.5,
+                )
+            except asyncio.TimeoutError:
+                # No message yet — loop back to check hangup flag
+                continue
+            except (WebSocketDisconnect, RuntimeError):
+                # Socket closed by remote or by a previous close() call
+                print("[BRIDGE] 🔌 WebSocket disconnected (receive)")
+                break
+
             data = json.loads(message)
             event = data.get("event")
 
@@ -297,9 +333,6 @@ async def smartflo_websocket_endpoint(websocket: WebSocket):
                 reason = stop_data.get("reason", "Unknown")
                 print(f"[BRIDGE]    Reason: {reason}")
                 print(f"[BRIDGE]    Total media packets received: {media_count}")
-
-                if bridge and bridge.room:
-                    await bridge.room.disconnect()
                 break
 
             elif event == "mark":
@@ -313,14 +346,15 @@ async def smartflo_websocket_endpoint(websocket: WebSocket):
 
     except WebSocketDisconnect:
         print(f"[BRIDGE] 🔌 WebSocket disconnected (media packets: {media_count})")
-        if bridge and bridge.room:
-            await bridge.room.disconnect()
     except Exception as e:
-        print(f"[BRIDGE] ❌ Error in WebSocket handler: {e}")
+        print(f"[BRIDGE] ❌ Unexpected error in WebSocket handler: {e}")
         import traceback
         traceback.print_exc()
-        if bridge and bridge.room:
-            await bridge.room.disconnect()
+    finally:
+        # Always clean up LiveKit, regardless of how the loop exited
+        if bridge:
+            await bridge.teardown()
+        print("[BRIDGE] 🔒 WebSocket handler finished")
 
 
 @app.get("/")

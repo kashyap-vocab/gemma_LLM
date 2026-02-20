@@ -64,8 +64,8 @@ echo "Python: $(which python)"
 
 # ---- Step 3: Start LiveKit Agent ----
 echo -e "\n${GREEN}[3/4] Starting LiveKit Agent...${NC}"
-cd "$PROJECT_ROOT/agent"
-python web_rtc_server.py dev &
+cd "$PROJECT_ROOT"
+python agent/web_rtc_server.py dev &
 AGENT_PID=$!
 echo -e "Agent PID: ${AGENT_PID}"
 

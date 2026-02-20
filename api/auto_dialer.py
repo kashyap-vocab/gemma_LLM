@@ -1,13 +1,15 @@
 """
-Backend auto-dialer: orchestrates sequential outbound calls and streams
-live status updates to the frontend via Server-Sent Events (SSE).
+Backend auto-dialer: orchestrates concurrent outbound calls (up to CONCURRENCY
+at a time) and streams live status updates to the frontend via Server-Sent Events (SSE).
 
 Flow per customer:
   1. Dispatch LiveKit agent (Route 1 logic)
-  2. Wait 5 seconds for agent init
+  2. Wait 2 seconds for agent init
   3. Trigger SmartFlo outbound call (Route 2 logic)
   4. Poll DB until call_status = completed/failed (max 3 minutes)
-  5. Push SSE event, move to next customer
+  5. Push SSE event, decrement active-call slot (semaphore released)
+
+Up to CONCURRENCY calls run simultaneously; the rest wait for a slot to open.
 """
 
 import asyncio
@@ -31,6 +33,13 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 # ---------------------------------------------------------------------------
+# Concurrency setting — must match num_idle_processes in web_rtc_server.py
+# ---------------------------------------------------------------------------
+# CONCURRENCY=4  ←→  num_idle_processes=4  (zero cold-start latency)
+# SmartFlo: confirm your account has ≥4 outbound PSTN channels provisioned.
+CONCURRENCY = 4
+
+# ---------------------------------------------------------------------------
 # Shared state (single process — uvicorn with one worker is the assumed setup)
 # ---------------------------------------------------------------------------
 _state = {
@@ -40,7 +49,8 @@ _state = {
     "total": 0,
     "completed": 0,
     "failed": 0,
-    "current_customer": None,
+    "active_calls": 0,        # how many calls are in-flight right now
+    "current_customer": None, # kept for backward compatibility (last started)
 }
 
 # Async queue — background task pushes dicts, SSE endpoint reads them
@@ -150,43 +160,33 @@ async def _wait_for_call_completion(
 
 
 # ---------------------------------------------------------------------------
-# Core background task: iterate through customer list and call each one
+# Per-customer coroutine — runs inside a semaphore slot
 # ---------------------------------------------------------------------------
-async def _run_auto_dialer(customers: list) -> None:
+async def _call_one_customer(
+    idx: int,
+    customer: dict,
+    total: int,
+    semaphore: asyncio.Semaphore,
+) -> None:
     """
-    Sequential auto-dialer loop.  Runs as a background asyncio task.
+    Handle a single customer call end-to-end.
+    The semaphore limits how many of these can run concurrently.
     """
-    global _state
-
-    _state.update(
-        {
-            "active": True,
-            "stop_requested": False,
-            "current_index": -1,
-            "total": len(customers),
-            "completed": 0,
-            "failed": 0,
-            "current_customer": None,
-        }
-    )
-
-    lk_url = os.getenv("LIVEKIT_URL", "")
-    lk_api_key = os.getenv("LIVEKIT_API_KEY", "")
-    lk_api_secret = os.getenv("LIVEKIT_API_SECRET", "")
-    api_url = lk_url.replace("wss://", "https://")
-
-    database_url = os.getenv("DATABASE_URL")
-
-    # Short pause so the frontend's new SSE connection can be established
-    # before the first 'calling' event is pushed into the queue.
-    # Without this, the residual server-side SSE generator from the previous
-    # session (still draining before HTTP close is detected) can consume it.
-    await asyncio.sleep(0.4)
-
-    for idx, customer in enumerate(customers):
+    async with semaphore:
         if _state["stop_requested"]:
-            _push_event({"type": "stopped", "index": idx, "total": len(customers)})
-            break
+            _push_event({"type": "stopped", "index": idx, "total": total})
+            return
+
+        # Stagger: 150 ms × slot-position within each batch of CONCURRENCY.
+        # Prevents all 4 calls hitting SmartFlo + LiveKit APIs at the exact
+        # same instant (thundering-herd) while remaining effectively parallel.
+        stagger_ms = (idx % CONCURRENCY) * 0.150   # 0 ms, 150 ms, 300 ms, 450 ms
+        if stagger_ms > 0:
+            await asyncio.sleep(stagger_ms)
+
+        if _state["stop_requested"]:
+            _push_event({"type": "stopped", "index": idx, "total": total})
+            return
 
         customer_id = customer["id"]
         customer_name = customer["customer_name"]
@@ -194,31 +194,40 @@ async def _run_auto_dialer(customers: list) -> None:
         phone_normalized = _normalize_phone(phone_number)
         room_name = f"call-{phone_normalized}"
 
-        _state["current_index"] = idx
+        _state["current_index"] = idx          # last-started (informational)
         _state["current_customer"] = customer_name
+        _state["active_calls"] += 1
 
         logger.info(
-            f"[AutoDialer] [{idx+1}/{len(customers)}] Calling {customer_name} ({phone_number})"
+            f"[AutoDialer] [{idx+1}/{total}] Calling {customer_name} ({phone_number}) "
+            f"[active={_state['active_calls']}]"
         )
 
         _push_event(
             {
                 "type": "calling",
                 "index": idx,
-                "total": len(customers),
+                "total": total,
                 "customer_id": customer_id,
                 "customer_name": customer_name,
                 "phone_number": phone_number,
+                "active_calls": _state["active_calls"],
             }
         )
 
+        lk_url = os.getenv("LIVEKIT_URL", "")
+        lk_api_key = os.getenv("LIVEKIT_API_KEY", "")
+        lk_api_secret = os.getenv("LIVEKIT_API_SECRET", "")
+        api_url = lk_url.replace("wss://", "https://")
+        database_url = os.getenv("DATABASE_URL")
+
         try:
-            # ------------------------------------------------------------------
-            # Step 1: Route 1 — store context + dispatch agent to LiveKit room
-            # ------------------------------------------------------------------
             import psycopg2
             import json as _json
 
+            # ------------------------------------------------------------------
+            # Step 1: Route 1 — store context + dispatch agent to LiveKit room
+            # ------------------------------------------------------------------
             if database_url:
                 try:
                     conn = psycopg2.connect(database_url)
@@ -327,8 +336,9 @@ async def _run_auto_dialer(customers: list) -> None:
             await asyncio.sleep(2)
 
             if _state["stop_requested"]:
-                _push_event({"type": "stopped", "index": idx, "total": len(customers)})
-                break
+                _state["active_calls"] -= 1
+                _push_event({"type": "stopped", "index": idx, "total": total})
+                return
 
             # ------------------------------------------------------------------
             # Step 3: Route 2 — update status to 'calling' + trigger SmartFlo
@@ -382,19 +392,21 @@ async def _run_auto_dialer(customers: list) -> None:
                         pass
 
                 _state["failed"] += 1
+                _state["active_calls"] -= 1
                 _push_event(
                     {
                         "type": "failed",
                         "index": idx,
-                        "total": len(customers),
+                        "total": total,
                         "customer_id": customer_id,
                         "customer_name": customer_name,
                         "reason": call_result.get("message", "SmartFlo error"),
                         "completed": _state["completed"],
                         "failed": _state["failed"],
+                        "active_calls": _state["active_calls"],
                     }
                 )
-                continue
+                return
 
             logger.info(
                 f"[AutoDialer] SmartFlo call initiated for {customer_name}, "
@@ -408,34 +420,46 @@ async def _run_auto_dialer(customers: list) -> None:
 
             if final_status == "completed":
                 _state["completed"] += 1
+                _state["active_calls"] -= 1
                 _push_event(
                     {
                         "type": "completed",
                         "index": idx,
-                        "total": len(customers),
+                        "total": total,
                         "customer_id": customer_id,
                         "customer_name": customer_name,
                         "phone_number": phone_number,
                         "completed": _state["completed"],
                         "failed": _state["failed"],
+                        "active_calls": _state["active_calls"],
                     }
                 )
             elif final_status == "stopped":
-                _push_event({"type": "stopped", "index": idx, "total": len(customers), "customer_id": customer_id})
-                break
+                _state["active_calls"] -= 1
+                _push_event(
+                    {
+                        "type": "stopped",
+                        "index": idx,
+                        "total": total,
+                        "customer_id": customer_id,
+                        "active_calls": _state["active_calls"],
+                    }
+                )
             else:
                 # failed or timeout
                 _state["failed"] += 1
+                _state["active_calls"] -= 1
                 _push_event(
                     {
                         "type": "failed" if final_status == "failed" else "timeout",
                         "index": idx,
-                        "total": len(customers),
+                        "total": total,
                         "customer_id": customer_id,
                         "customer_name": customer_name,
                         "reason": "Call failed" if final_status == "failed" else "No answer / timeout",
                         "completed": _state["completed"],
                         "failed": _state["failed"],
+                        "active_calls": _state["active_calls"],
                     }
                 )
 
@@ -444,20 +468,59 @@ async def _run_auto_dialer(customers: list) -> None:
                 f"[AutoDialer] Unexpected error for {customer_name}: {exc}", exc_info=True
             )
             _state["failed"] += 1
+            _state["active_calls"] = max(0, _state["active_calls"] - 1)
             _push_event(
                 {
                     "type": "failed",
                     "index": idx,
-                    "total": len(customers),
+                    "total": total,
                     "customer_id": customer_id,
                     "customer_name": customer_name,
                     "reason": str(exc),
                     "completed": _state["completed"],
                     "failed": _state["failed"],
+                    "active_calls": _state["active_calls"],
                 }
             )
 
-        # No artificial gap — next call starts immediately after completion
+
+# ---------------------------------------------------------------------------
+# Core background task: dispatch all customers concurrently (max CONCURRENCY)
+# ---------------------------------------------------------------------------
+async def _run_auto_dialer(customers: list) -> None:
+    """
+    Concurrent auto-dialer.  Runs as a background asyncio task.
+    Uses a semaphore to cap at CONCURRENCY simultaneous calls.
+    """
+    global _state
+
+    _state.update(
+        {
+            "active": True,
+            "stop_requested": False,
+            "current_index": -1,
+            "total": len(customers),
+            "completed": 0,
+            "failed": 0,
+            "active_calls": 0,
+            "current_customer": None,
+        }
+    )
+
+    # Short pause so the frontend's new SSE connection can be established
+    # before the first 'calling' event is pushed into the queue.
+    await asyncio.sleep(0.4)
+
+    semaphore = asyncio.Semaphore(CONCURRENCY)
+
+    # Create one coroutine per customer and run them all; the semaphore keeps
+    # at most CONCURRENCY running at any instant.
+    tasks = [
+        _call_one_customer(idx, customer, len(customers), semaphore)
+        for idx, customer in enumerate(customers)
+    ]
+
+    await asyncio.gather(*tasks, return_exceptions=True)
 
     # Loop finished
     _push_event(
@@ -470,6 +533,7 @@ async def _run_auto_dialer(customers: list) -> None:
     )
 
     _state["active"] = False
+    _state["active_calls"] = 0
     _state["current_customer"] = None
     _state["current_index"] = -1
     logger.info(
@@ -511,7 +575,9 @@ def _state_snapshot() -> dict:
         "total": _state["total"],
         "completed": _state["completed"],
         "failed": _state["failed"],
+        "active_calls": _state["active_calls"],
         "current_customer": _state["current_customer"],
+        "concurrency": CONCURRENCY,
     }
 
 
@@ -520,6 +586,7 @@ def _state_snapshot() -> dict:
 # ---------------------------------------------------------------------------
 class AutoDialerStartRequest(BaseModel):
     customer_ids: Optional[List[int]] = None  # if None → call all customers
+    concurrency: Optional[int] = None          # override CONCURRENCY at runtime
 
 
 # ---------------------------------------------------------------------------
@@ -533,10 +600,18 @@ async def start_auto_dialer(
 ):
     """
     Start the auto-dialer.  Fetches customers from DB and launches
-    a background task that calls them sequentially.
+    a background task that calls up to CONCURRENCY customers at a time.
+    You can override the concurrency limit per-request via the 'concurrency' field.
     """
+    global CONCURRENCY
+
     if _state["active"]:
         return {"success": False, "message": "Auto-dialer is already running"}
+
+    # Allow runtime override of concurrency (clamped to 1–20)
+    if request.concurrency is not None:
+        CONCURRENCY = max(1, min(20, request.concurrency))
+        logger.info(f"[AutoDialer] Concurrency set to {CONCURRENCY}")
 
     # Clear any stale events from a previous run so the SSE client receives
     # only events from this run (including the very first 'calling' event).
@@ -548,15 +623,12 @@ async def start_auto_dialer(
 
     # Fetch customers and preserve display order
     if request.customer_ids:
-        # Fetch the requested rows, then re-order to match the frontend's display order
         rows = db.query(CustomerData).filter(
             CustomerData.id.in_(request.customer_ids)
         ).all()
         id_to_customer = {c.id: c for c in rows}
-        # Preserve the exact order the frontend sent (top → bottom as shown in table)
         ordered = [id_to_customer[cid] for cid in request.customer_ids if cid in id_to_customer]
     else:
-        # Fallback: call all, newest-upload first, stable tie-break by id
         ordered = db.query(CustomerData).order_by(
             CustomerData.uploaded_at.desc(),
             CustomerData.id.asc(),
@@ -577,11 +649,15 @@ async def start_auto_dialer(
     # Launch background task
     asyncio.create_task(_run_auto_dialer(customer_list))
 
-    logger.info(f"[AutoDialer] Started — {len(customer_list)} customers queued")
+    logger.info(
+        f"[AutoDialer] Started — {len(customer_list)} customers queued, "
+        f"concurrency={CONCURRENCY}"
+    )
     return {
         "success": True,
-        "message": f"Auto-dialer started for {len(customer_list)} customers",
+        "message": f"Auto-dialer started for {len(customer_list)} customers (concurrency={CONCURRENCY})",
         "total": len(customer_list),
+        "concurrency": CONCURRENCY,
     }
 
 
@@ -604,14 +680,15 @@ async def auto_dialer_events():
 @router.post("/auto-dialer/stop")
 async def stop_auto_dialer():
     """
-    Request the auto-dialer to stop after the current call finishes.
+    Request the auto-dialer to stop.
+    All in-flight calls complete normally; no new slots are opened.
     """
     if not _state["active"]:
         return {"success": False, "message": "Auto-dialer is not running"}
 
     _state["stop_requested"] = True
     logger.info("[AutoDialer] Stop requested")
-    return {"success": True, "message": "Stop signal sent — current call will finish first"}
+    return {"success": True, "message": "Stop signal sent — in-flight calls will finish"}
 
 
 @router.get("/auto-dialer/status")

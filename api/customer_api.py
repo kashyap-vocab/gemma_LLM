@@ -152,61 +152,109 @@ async def upload_excel(file: UploadFile = File(...), db: Session = Depends(get_d
                 status_code=400, detail="No valid customer data found in Excel"
             )
 
-        # Insert into database using ORM
+        # Use raw SQL with explicit ::text casts to avoid SQLAlchemy ORM executemany
+        # type-inference bugs where psycopg2 misidentifies string columns as integer.
+        from sqlalchemy import text as sa_text
+
+        UPSERT_SQL = sa_text("""
+            INSERT INTO customer_data (
+                agreement_no, branch, zone, product,
+                bkt_grp_may, bkt_grp_june,
+                ncm_name, agency_code, agency_name, roll,
+                am_name, rcm_name, zcm_name,
+                customer_name, contact_number,
+                emi, state, area, dealer_name, asset,
+                registration_no, repo_status, repo_intimation_date,
+                settlement_done, receipt_date, deposition_date, payment_amt
+            ) VALUES (
+                cast(:agreement_no as varchar), cast(:branch as varchar),
+                cast(:zone as varchar), cast(:product as varchar),
+                cast(:bkt_grp_may as varchar), cast(:bkt_grp_june as varchar),
+                cast(:ncm_name as varchar), cast(:agency_code as varchar),
+                cast(:agency_name as varchar), cast(:roll as varchar),
+                cast(:am_name as varchar), cast(:rcm_name as varchar),
+                cast(:zcm_name as varchar),
+                cast(:customer_name as varchar), cast(:contact_number as varchar),
+                :emi,
+                cast(:state as varchar), cast(:area as varchar),
+                cast(:dealer_name as varchar), cast(:asset as varchar),
+                cast(:registration_no as varchar), cast(:repo_status as varchar),
+                :repo_intimation_date,
+                cast(:settlement_done as varchar), :receipt_date,
+                :deposition_date, :payment_amt
+            )
+            ON CONFLICT (contact_number) DO UPDATE SET
+                agreement_no         = EXCLUDED.agreement_no,
+                branch               = EXCLUDED.branch,
+                zone                 = EXCLUDED.zone,
+                product              = EXCLUDED.product,
+                bkt_grp_may          = EXCLUDED.bkt_grp_may,
+                bkt_grp_june         = EXCLUDED.bkt_grp_june,
+                ncm_name             = EXCLUDED.ncm_name,
+                agency_code          = EXCLUDED.agency_code,
+                agency_name          = EXCLUDED.agency_name,
+                roll                 = EXCLUDED.roll,
+                am_name              = EXCLUDED.am_name,
+                rcm_name             = EXCLUDED.rcm_name,
+                zcm_name             = EXCLUDED.zcm_name,
+                customer_name        = EXCLUDED.customer_name,
+                emi                  = EXCLUDED.emi,
+                state                = EXCLUDED.state,
+                area                 = EXCLUDED.area,
+                dealer_name          = EXCLUDED.dealer_name,
+                asset                = EXCLUDED.asset,
+                registration_no      = EXCLUDED.registration_no,
+                repo_status          = EXCLUDED.repo_status,
+                repo_intimation_date = EXCLUDED.repo_intimation_date,
+                settlement_done      = EXCLUDED.settlement_done,
+                receipt_date         = EXCLUDED.receipt_date,
+                deposition_date      = EXCLUDED.deposition_date,
+                payment_amt          = EXCLUDED.payment_amt,
+                updated_at           = now()
+            RETURNING (xmax = 0) AS was_inserted
+        """)
+
         inserted_count = 0
         updated_count = 0
 
         try:
             for _, row in df.iterrows():
-                # Check if customer already exists (by contact_number)
-                existing = (
-                    db.query(CustomerData)
-                    .filter(CustomerData.contact_number == row["contact_number"])
-                    .first()
-                )
-
-                customer_data = {
-                    "agreement_no": row.get("agreement_no") or None,
-                    "branch": row.get("branch") or None,
-                    "zone": row.get("zone") or None,
-                    "product": row.get("product") or None,
-                    # bkt group fields may contain non-numeric codes like 'X-FC'
-                    # convert to int when possible, otherwise store None to avoid DB type errors
-                    "bkt_grp_may": _to_int(row.get("bkt_grp_may")),
-                    "bkt_grp_june": _to_int(row.get("bkt_grp_june")),
-                    "ncm_name": row.get("ncm_name") or None,
-                    "agency_code": row.get("agency_code") or None,
-                    "agency_name": row.get("agency_name") or None,
-                    "roll": row.get("roll") or None,
-                    "am_name": row.get("am_name") or None,
-                    "rcm_name": row.get("rcm_name") or None,
-                    "zcm_name": row.get("zcm_name") or None,
-                    "customer_name": row["customer_name"],
-                    "contact_number": row["contact_number"],
-                    "emi": _to_numeric(row.get("emi")),
-                    "state": row.get("state") or None,
-                    "area": row.get("area") or None,
-                    "dealer_name": row.get("dealer_name") or None,
-                    "asset": row.get("asset") or None,
-                    "registration_no": row.get("registration_no") or None,
-                    "repo_status": row.get("repo_status") or None,
-                    "repo_intimation_date": _to_date(row.get("repo_intimation_date")),
-                    "settlement_done": row.get("settlement_done") or None,
-                    "receipt_date": _to_date(row.get("receipt_date")),
-                    "deposition_date": _to_date(row.get("deposition_date")),
-                    "payment_amt": _to_numeric(row.get("payment_amt")),
+                params = {
+                    "agreement_no":          _to_str(row.get("agreement_no")),
+                    "branch":                _to_str(row.get("branch")),
+                    "zone":                  _to_str(row.get("zone")),
+                    "product":               _to_str(row.get("product")),
+                    "bkt_grp_may":           _to_bkt_str(row.get("bkt_grp_may")),
+                    "bkt_grp_june":          _to_bkt_str(row.get("bkt_grp_june")),
+                    "ncm_name":              _to_str(row.get("ncm_name")),
+                    "agency_code":           _to_str(row.get("agency_code")),
+                    "agency_name":           _to_str(row.get("agency_name")),
+                    "roll":                  _to_str(row.get("roll")),
+                    "am_name":               _to_str(row.get("am_name")),
+                    "rcm_name":              _to_str(row.get("rcm_name")),
+                    "zcm_name":              _to_str(row.get("zcm_name")),
+                    "customer_name":         str(row["customer_name"]).strip(),
+                    "contact_number":        str(row["contact_number"]).strip(),
+                    "emi":                   _to_numeric(row.get("emi")),
+                    "state":                 _to_str(row.get("state")),
+                    "area":                  _to_str(row.get("area")),
+                    "dealer_name":           _to_str(row.get("dealer_name")),
+                    "asset":                 _to_str(row.get("asset")),
+                    "registration_no":       _to_str(row.get("registration_no")),
+                    "repo_status":           _to_str(row.get("repo_status")),
+                    "repo_intimation_date":  _to_date(row.get("repo_intimation_date")),
+                    "settlement_done":       _to_str(row.get("settlement_done")),
+                    "receipt_date":          _to_date(row.get("receipt_date")),
+                    "deposition_date":       _to_date(row.get("deposition_date")),
+                    "payment_amt":           _to_numeric(row.get("payment_amt")),
                 }
 
-                if existing:
-                    # Update existing record
-                    for key, value in customer_data.items():
-                        setattr(existing, key, value)
-                    updated_count += 1
-                else:
-                    # Insert new record
-                    new_customer = CustomerData(**customer_data)
-                    db.add(new_customer)
+                result = db.execute(UPSERT_SQL, params)
+                was_inserted = result.scalar()
+                if was_inserted:
                     inserted_count += 1
+                else:
+                    updated_count += 1
 
             db.commit()
         except Exception as e:
@@ -228,10 +276,28 @@ async def upload_excel(file: UploadFile = File(...), db: Session = Depends(get_d
         raise HTTPException(status_code=500, detail=f"Error processing Excel: {str(e)}")
 
 
+def _to_str(value):
+    """Convert value to a stripped string, return None if blank/NaN."""
+    if value is None:
+        return None
+    try:
+        if pd.isna(value):
+            return None
+    except (TypeError, ValueError):
+        pass
+    s = str(value).strip()
+    return s if s and s.lower() != "nan" else None
+
+
 def _to_numeric(value):
     """Convert value to numeric, return None if invalid."""
-    if pd.isna(value) or value == "" or value is None:
+    if value is None or value == "":
         return None
+    try:
+        if pd.isna(value):
+            return None
+    except (TypeError, ValueError):
+        pass
     try:
         return float(value)
     except (ValueError, TypeError):
@@ -239,22 +305,40 @@ def _to_numeric(value):
 
 
 def _to_int(value):
-    """Convert value to int if possible, otherwise return None.
-
-    Many Excel sheets contain codes like 'X-FC' in bucket-group columns that
-    are not integers. When the DB column expects an integer, attempting to
-    insert those strings causes a DB error. Use this helper to coerce numeric
-    values and return None for non-numeric ones.
-    """
+    """Convert value to int if possible, otherwise return None."""
     if pd.isna(value) or value == "" or value is None:
         return None
     try:
-        # Some numeric-looking values may be floats (e.g., 3.0) — cast via float
-        # then to int to handle that case.
         v = float(value)
         return int(v)
     except (ValueError, TypeError):
         return None
+
+
+def _to_bkt_str(value):
+    """Convert bucket-group value to a clean string for VARCHAR storage.
+
+    Numeric values like 1.0 are stored as '1'; text codes like 'X-FC' are
+    stored as-is. Returns None for blank/NaN values.
+    """
+    if value is None:
+        return None
+    try:
+        if pd.isna(value):
+            return None
+    except (TypeError, ValueError):
+        pass
+    s = str(value).strip()
+    if s == "" or s.lower() == "nan":
+        return None
+    # Clean up float representation: '1.0' -> '1'
+    try:
+        f = float(s)
+        if f == int(f):
+            return str(int(f))
+        return s
+    except (ValueError, TypeError):
+        return s
 
 
 def _to_date(value):
