@@ -5,8 +5,8 @@ WORKDIR /app/frontend
 # Copy package files
 COPY frontend/package.json frontend/yarn.lock* frontend/package-lock.json* ./
 
-# Install dependencies (use npm install for flexibility)
-RUN npm install --prefer-offline --no-audit --legacy-peer-deps
+# Install dependencies
+RUN npm ci --prefer-offline --no-audit
 
 # Copy frontend source
 COPY frontend/src ./src
