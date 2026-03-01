@@ -3,10 +3,7 @@ FROM python:3.13-slim AS base
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PYTHONUTF8=1 \
-    PYTHONOPTIMIZE=2 \
-    # Performance tuning for 5 concurrent calls
-    MALLOC_ARENA_MAX=2 \
-    PYTHONHASHSEED=0
+    PYTHONOPTIMIZE=2
 
 WORKDIR /app
 
@@ -46,9 +43,7 @@ RUN printf '#!/usr/bin/env python\nimport sys\nimport os\n\nos.chdir("/app")\nsy
     chmod +x /app/start_agent.py
 
 # Delete ONLY the .py files that have been compiled to .so (to protect IP)
-# But keep them if .so compilation failed
-RUN for file in \
-    /app/agent/db_storage.py \
+RUN rm -f /app/agent/db_storage.py \
     /app/agent/metrics.py \
     /app/agent/survey_agent.py \
     /app/agent/web_rtc_server.py \
@@ -57,16 +52,7 @@ RUN for file in \
     /app/db/database.py \
     /app/db/models.py \
     /app/db/utils.py \
-    /app/smart-flo/smartflow_bridge.py; do \
-        base=$(basename "$file" .py); \
-        dir=$(dirname "$file"); \
-        if [ -f "$dir/$base.so" ] || [ -f "$dir/${base}.cpython-*.so" ]; then \
-            echo "Removing $file (compiled version exists)"; \
-            rm -f "$file"; \
-        else \
-            echo "Keeping $file (no compiled version found)"; \
-        fi; \
-    done
+    /app/smart-flo/smartflow_bridge.py
 
 # Clean up build artifacts
 RUN find /app -name "*.c" -type f -delete
@@ -77,23 +63,9 @@ FROM python:3.13-slim AS runtime
 ENV PYTHONOPTIMIZE=2 \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PYTHONPATH=/app \
-    # Performance tuning for concurrent calls
-    MALLOC_ARENA_MAX=2 \
-    PYTHONHASHSEED=0 \
-    # Async I/O optimizations
-    PYTHONASYNCIODEBUG=0
+    PYTHONPATH=/app
 
 WORKDIR /app
-
-# Install runtime dependencies for LiveKit
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
-        libglib2.0-0 \
-        libgobject-2.0-0 \
-        libgstreamer1.0-0 \
-        libgstreamer-plugins-base1.0-0 \
-    && rm -rf /var/lib/apt/lists/*
 
 # Copy pre-built wheels from builder
 COPY --from=builder /wheels /wheels
@@ -106,9 +78,6 @@ RUN pip install --no-cache-dir --no-index --find-links /wheels -r /app/requireme
 
 # Copy ONLY what's needed for runtime
 COPY --from=builder /app/agent/ /app/agent/
-COPY --from=builder /app/api/ /app/api/
-COPY --from=builder /app/db/ /app/db/
-COPY --from=builder /app/smart-flo/ /app/smart-flo/
 COPY --from=builder /app/start_agent.py /app/start_agent.py
 
 # Download model files during build to include them in the image
