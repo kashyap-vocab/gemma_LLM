@@ -22,11 +22,9 @@ services:
           memory: 1G
 
   agent:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: somashaker23/ltfs-agent-pl:latest
     container_name: livekit-agent
-    command: ["python", "/app/start_agent.py", "dev"]
+    command: ["python", "/app/web_rtc_agent.py", "dev"]
     env_file:
       - .env
     restart: unless-stopped
