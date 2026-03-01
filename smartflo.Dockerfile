@@ -5,8 +5,8 @@ WORKDIR /app/frontend
 # Copy package files
 COPY frontend/package.json frontend/yarn.lock* frontend/package-lock.json* ./
 
-# Install dependencies
-RUN npm ci --prefer-offline --no-audit
+# Install dependencies (use npm install for flexibility)
+RUN npm install --prefer-offline --no-audit --legacy-peer-deps
 
 # Copy frontend source
 COPY frontend/src ./src
@@ -82,14 +82,22 @@ ENV PYTHONOPTIMIZE=2 \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PYTHONPATH=/app \
-    PYTHONHASHSEED=random
+    # Performance tuning for 5 concurrent calls
+    MALLOC_ARENA_MAX=2 \
+    PYTHONHASHSEED=0 \
+    PYTHONASYNCIODEBUG=0
 
 WORKDIR /app
 
-# Install runtime dependencies (minimal)
+# Install runtime dependencies for LiveKit and performance
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-        curl postgresql-client \
+        curl \
+        postgresql-client \
+        libglib2.0-0 \
+        libgobject-2.0-0 \
+        libgstreamer1.0-0 \
+        libgstreamer-plugins-base1.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy wheels and install from builder
@@ -127,6 +135,14 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
 EXPOSE 8000 5173
 
 # Run FastAPI server with Uvicorn (serves both API and frontend)
+# Performance optimized for 5 concurrent calls
 ENTRYPOINT ["python", "-m", "uvicorn"]
-CMD ["api.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+CMD ["api.main:app", \
+     "--host", "0.0.0.0", \
+     "--port", "8000", \
+     "--workers", "1", \
+     "--log-level", "info", \
+     "--no-access-log", \
+     "--limit-concurrency", "50", \
+     "--backlog", "100"]
 
