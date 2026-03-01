@@ -35,9 +35,9 @@ router = APIRouter()
 # ---------------------------------------------------------------------------
 # Concurrency setting — must match num_idle_processes in web_rtc_server.py
 # ---------------------------------------------------------------------------
-# CONCURRENCY=3  ←→  num_idle_processes=3  (zero cold-start latency)
-# SmartFlo: confirm your account has ≥3 outbound PSTN channels provisioned.
-CONCURRENCY = 3
+# CONCURRENCY=5  ←→  num_idle_processes=5  (zero cold-start latency)
+# SmartFlo: confirm your account has ≥5 outbound PSTN channels provisioned.
+CONCURRENCY = 5
 
 # ---------------------------------------------------------------------------
 # Shared state (single process — uvicorn with one worker is the assumed setup)

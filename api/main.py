@@ -80,4 +80,14 @@ else:
 
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(
+        app,
+        host="0.0.0.0",
+        port=8000,
+        # Performance optimizations for 5 concurrent calls
+        workers=1,              # Single worker (shared state in auto_dialer.py)
+        log_level="info",       # Reduce logging overhead
+        access_log=False,       # Disable access logs for performance
+        limit_concurrency=50,   # Max concurrent connections
+        backlog=100,            # Connection queue size
+    )

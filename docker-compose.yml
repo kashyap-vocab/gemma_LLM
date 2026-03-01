@@ -11,13 +11,35 @@ services:
     ports:
       - "8000:8000"
     restart: unless-stopped
+    # Performance optimizations for 5 concurrent calls
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2G
+        reservations:
+          cpus: '1.0'
+          memory: 1G
 
   agent:
-    image: somashaker23/ltfs-agent-pl:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
     container_name: livekit-agent
-    command: ["python", "agent/web_rtc_server.py", "dev"]
+    command: ["python", "/app/start_agent.py", "dev"]
     env_file:
       - .env
     restart: unless-stopped
     depends_on:
       - api
+    # Performance optimizations for 5 concurrent calls
+    deploy:
+      resources:
+        limits:
+          cpus: '4.0'
+          memory: 8G
+        reservations:
+          cpus: '2.0'
+          memory: 4G
+    # Shared memory for better IPC performance
+    shm_size: '2gb'

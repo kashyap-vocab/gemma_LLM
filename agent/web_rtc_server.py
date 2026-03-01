@@ -367,16 +367,16 @@ async def my_agent(ctx: agents.JobContext):
 # ---------------------------------------------------------------------------
 # Server configuration — exported for Docker entrypoint and start.sh
 # ---------------------------------------------------------------------------
-# num_idle_processes=3  → keep 3 pre-warmed agent processes ready at all times
-#                          so all 3 concurrent calls are accepted with zero
+# num_idle_processes=5  → keep 5 pre-warmed agent processes ready at all times
+#                          so all 5 concurrent calls are accepted with zero
 #                          cold-start latency (VAD/STT/LLM/TTS already loaded).
 # Each LiveKit room gets its own process slot; the semaphore in auto_dialer.py
-# (CONCURRENCY=3) ensures we never dispatch more than 3 rooms simultaneously.
+# (CONCURRENCY=5) ensures we never dispatch more than 5 rooms simultaneously.
 server = agents.WorkerOptions(
     agent_name="LTFS_SurveyAgent-Soma",
     entrypoint_fnc=my_agent,
     prewarm_fnc=prewarm,
-    num_idle_processes=3,   # pre-warm 3 slots = 3 simultaneous calls, zero latency
+    num_idle_processes=5,   # pre-warm 5 slots = 5 simultaneous calls, zero latency
 )
 
 if __name__ == "__main__":
