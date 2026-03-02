@@ -32,10 +32,14 @@ def _default_feedback_session(call_id: str) -> dict:
 def _to_numeric(v) -> Optional[float]:
     """Convert value to numeric, return None if invalid."""
     if v is None or v == '':
+        print(f"🔍 [DEBUG] _to_numeric: value is None or empty")
         return None
     try:
-        return float(v)
-    except (TypeError, ValueError):
+        result = float(v)
+        print(f"🔍 [DEBUG] _to_numeric: successfully converted '{v}' to {result}")
+        return result
+    except (TypeError, ValueError) as e:
+        print(f"🔍 [DEBUG] _to_numeric: failed to convert '{v}' (type: {type(v)}): {e}")
         return None
 
 
@@ -188,6 +192,16 @@ def _persist_feedback_to_db_sync(call_id: str, customer_phone: Optional[str] = N
         return
     phone = customer_phone or call_id
     payment = data.get("payment") or {}
+    
+    # Debug logging for payment amount extraction
+    raw_amount = payment.get("amount") or data.get("payment_amount")
+    print(f"🔍 [DEBUG] Persisting feedback for call_id={call_id}")
+    print(f"🔍 [DEBUG] Full feedback_sessions data: {data}")
+    print(f"🔍 [DEBUG] Payment dict: {payment}")
+    print(f"🔍 [DEBUG] Raw amount value: {raw_amount} (type: {type(raw_amount)})")
+    numeric_amount = _to_numeric(raw_amount)
+    print(f"🔍 [DEBUG] Converted numeric amount: {numeric_amount}")
+    
     row = (
         phone,
         call_id,
@@ -200,10 +214,9 @@ def _persist_feedback_to_db_sync(call_id: str, customer_phone: Optional[str] = N
         payment.get("date") or payment.get("payment_date") or data.get("payment_date"),
         payment.get("mode") or payment.get("payment_mode") or data.get("payment_mode"),
         payment.get("reason") or payment.get("payment_reason") or data.get("payment_reason"),
-        _to_numeric(payment.get("amount") or data.get("payment_amount")),
+        numeric_amount,
         payment.get("field_executive_name") or data.get("field_executive_name"),
         payment.get("field_executive_contact") or data.get("field_executive_contact"),
-        data.get("stage"),
         data.get("customer_name"),
         data.get("confirmed"),
         data.get("category"),
@@ -223,7 +236,7 @@ def _persist_feedback_to_db_sync(call_id: str, customer_phone: Optional[str] = N
                             customer_phone = %s, identity_confirmed = %s, loan_taken = %s, last_month_payment = %s,
                             payee = %s, payee_name = %s, payee_contact = %s, payment_date = %s, payment_mode = %s,
                             payment_reason = %s, payment_amount = %s, field_executive_name = %s, field_executive_contact = %s,
-                            stage = %s, customer_name = %s, confirmed = %s, category = %s, started_at = %s
+                            customer_name = %s, confirmed = %s, category = %s, started_at = %s
                         WHERE id = %s
                         """,
                         (row[0],) + row[2:] + (existing[0],),
@@ -235,8 +248,8 @@ def _persist_feedback_to_db_sync(call_id: str, customer_phone: Optional[str] = N
                             customer_phone, call_id, identity_confirmed, loan_taken, last_month_payment,
                             payee, payee_name, payee_contact, payment_date, payment_mode, payment_reason,
                             payment_amount, field_executive_name, field_executive_contact,
-                            stage, customer_name, confirmed, category, started_at
-                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                            customer_name, confirmed, category, started_at
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                         """,
                         row,
                     )

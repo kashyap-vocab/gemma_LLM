@@ -214,7 +214,9 @@ After you say your closing statement you MUST call end_call() to disconnect the 
         Args:
             amount: The amount paid, e.g. 5555
         """
+        print(f"🔍 [DEBUG] store_payment_amount called with: {amount} (type: {type(amount)})")
         self._store_payment("amount", amount)
+        print(f"🔍 [DEBUG] Payment stored in session: {feedback_sessions.get(self._call_id, {}).get('payment', {})}")
         return f"Stored payment_amount={amount}. Proceed to next question."
 
     @function_tool()
@@ -282,6 +284,10 @@ After you say your closing statement you MUST call end_call() to disconnect the 
         """
         if not self._call_id:
             return "No call_id available."
+        
+        print(f"🔍 [DEBUG] complete_survey called with confirmed={confirmed}")
+        print(f"🔍 [DEBUG] Current feedback_sessions state: {feedback_sessions.get(self._call_id, {})}")
+        
         feedback_sessions.setdefault(self._call_id, _default_feedback_session(self._call_id))["confirmed"] = confirmed
         feedback_sessions[self._call_id]["category"] = "COMPLETE_SURVEY"
         asyncio.create_task(persist_feedback_to_db(self._call_id))
