@@ -9,3 +9,10 @@ __pycache__
 tests
 venv
 README.md
+certs.sh
+
+# AI-agent
+.claude
+.agents
+skills-lock.json
+CLAUDE.md
