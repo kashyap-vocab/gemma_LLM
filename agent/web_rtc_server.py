@@ -146,6 +146,25 @@ async def my_agent(ctx: agents.JobContext):
     if customer_name:
         feedback_sessions[call_id]["customer_name"] = customer_name
 
+    # Start transliteration NOW (parallel with session setup below).
+    # This avoids blocking the greeting after session.start() — previously
+    # the greeting was delayed up to 5 s waiting for this API call.
+    async def _transliterate(name: str) -> str:
+        try:
+            client = genai.Client()
+            resp = await client.aio.models.generate_content(
+                model="gemini-2.0-flash",
+                contents=f"Convert this Indian name from English to Hindi Devanagari script. Reply with ONLY the Devanagari name, nothing else: {name}",
+            )
+            return resp.text.strip()
+        except Exception as e:
+            print(f"⚠️ Transliteration error: {e}")
+            return name
+
+    transliteration_task = (
+        asyncio.create_task(_transliterate(customer_name)) if customer_name else None
+    )
+
     print(f"\n🎯 SESSION START")
     print(f"Room: {call_id}")
     if customer_name:
@@ -263,26 +282,21 @@ async def my_agent(ctx: agents.JobContext):
                     print(f" - {participant} (could not list tracks)")
         except Exception as e:
             print(f"Warning: could not enumerate remote participants: {e}")
-        # Transliterate customer name to Devanagari for TTS (with 5s timeout)
-        hindi_name = None
-        if customer_name:
+        # Collect transliteration result — task was started before session.start()
+        # so it has been running in parallel during session setup. In most cases
+        # it finishes long before we reach this point; wait at most 1 s for it.
+        hindi_name = customer_name  # safe default
+        if transliteration_task is not None:
             try:
-                client = genai.Client()
-                resp = await asyncio.wait_for(
-                    client.aio.models.generate_content(
-                        model="gemini-2.0-flash",
-                        contents=f"Convert this Indian name from English to Hindi Devanagari script. Reply with ONLY the Devanagari name, nothing else: {customer_name}",
-                    ),
-                    timeout=5.0,
+                hindi_name = await asyncio.wait_for(
+                    asyncio.shield(transliteration_task), timeout=1.0
                 )
-                hindi_name = resp.text.strip()
                 print(f"📝 Transliterated name: {customer_name} → {hindi_name}")
             except asyncio.TimeoutError:
-                print(f"⚠️ Transliteration timed out after 5s, using original name")
-                hindi_name = customer_name
+                print(f"⚠️ Transliteration still running after 1s, using original name")
+                transliteration_task.cancel()
             except Exception as e:
                 print(f"⚠️ Transliteration failed, using original: {e}")
-                hindi_name = customer_name
 
         # Dynamic greeting with customer name via TTS
         name_part = f"{hindi_name} जी" if hindi_name else "आप"
