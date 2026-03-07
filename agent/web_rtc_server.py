@@ -46,7 +46,7 @@ from livekit.plugins import sarvam
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
 from agent.metrics import MetricsTracker
-from agent.survey_agent import SurveyAssistant, call_end_signals
+from agent.survey_agent import SurveyAssistant
 
 load_dotenv()
 
@@ -312,9 +312,6 @@ async def my_agent(ctx: agents.JobContext):
         except Exception as e:
             print(f"⚠️ Greeting failed: {e} - session will continue")
 
-        # Register a call-end signal so end_call() can trigger hangup
-        call_end_signals[call_id] = asyncio.Event()
-
         # Keep session alive until the room disconnects (or hangup completes)
         disconnect_event = asyncio.Event()
 
@@ -322,38 +319,26 @@ async def my_agent(ctx: agents.JobContext):
         def on_room_disconnect():
             disconnect_event.set()
 
-        async def _wait_and_signal_hangup():
-            """Wait for end_call() signal, then hang up.
+        # When EndCallTool triggers session.shutdown() (after TTS finishes),
+        # the session emits "close". We hook into that to send the hangup
+        # data message that tells the SmartFlo bridge to disconnect PSTN.
+        def on_session_close(ev):
+            async def _send_hangup():
+                await asyncio.sleep(0.5)  # buffer for audio to flush through bridge
+                try:
+                    hangup_msg = _json.dumps({"action": "hangup"}).encode("utf-8")
+                    await ctx.room.local_participant.publish_data(hangup_msg, reliable=True)
+                    print(f"[AGENT] 📴 Hangup data message sent to room {call_id}")
+                except Exception as e:
+                    print(f"[AGENT] ❌ Failed to send hangup data message: {e}")
+                disconnect_event.set()
+            asyncio.create_task(_send_hangup())
 
-            The signal is set from survey_agent.end_call() via speech_handle.add_done_callback(),
-            so it only fires AFTER the closing TTS utterance has finished playing.
-            No need to poll agent_state_changed here — the timing is already correct.
-            """
-            await call_end_signals[call_id].wait()
-            print(f"[AGENT] 📴 Hangup signal received for {call_id} (TTS already drained)")
-
-            await asyncio.sleep(0.5)  # Small buffer for audio to flush through bridge
-
-            try:
-                import json as _j
-                hangup_msg = _j.dumps({"action": "hangup"}).encode("utf-8")
-                await ctx.room.local_participant.publish_data(hangup_msg, reliable=True)
-                print(f"[AGENT] 📴 Hangup data message sent to room {call_id}")
-            except Exception as e:
-                print(f"[AGENT] ❌ Failed to send hangup data message: {e}")
-
-            # Explicitly unblock the session so it always exits cleanly,
-            # regardless of whether LiveKit server auto-closes the room.
-            disconnect_event.set()
-
-        asyncio.create_task(_wait_and_signal_hangup())
+        session.once("close", on_session_close)
 
         await disconnect_event.wait()
 
     finally:
-        # Clean up call-end signal
-        call_end_signals.pop(call_id, None)
-
         print("\n\n🛑 Session ending...")
         tracker.print_session_summary()
 

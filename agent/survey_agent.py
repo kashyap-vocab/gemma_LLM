@@ -1,22 +1,31 @@
 import asyncio
-from livekit.agents import Agent, RunContext, function_tool
+from livekit.agents import Agent, function_tool
+from livekit.agents.beta.tools import EndCallTool
 from agent.db_storage import feedback_sessions, _default_feedback_session, persist_feedback_to_db
-
-# Shared signals: when complete_survey() is called, the event is set
-# so that web_rtc_server can detect it and trigger a hangup via the bridge.
-call_end_signals: dict[str, asyncio.Event] = {}
 
 
 class SurveyAssistant(Agent):
     def __init__(self, call_id: str = None, customer_name: str = None) -> None:
         self._call_id = call_id
         self._customer_name = customer_name
-        
+
         # Build instructions with customer name hint if available
         name_hint = ""
         if customer_name:
             name_hint = f"\n\nग्राहक का नाम: {customer_name} है। शुरुआत में सिर्फ एक बार \"{customer_name} जी\" बोल कर सम्बोधित करो, फिर नाम दोबारा मत लो, सिर्फ \"आप\" बोलो।"
-        
+
+        # Track end_call invocation in feedback session for observability
+        async def _on_end_call_invoked(ev):
+            if call_id:
+                feedback_sessions.setdefault(call_id, _default_feedback_session(call_id))["end_call_invoked"] = True
+                print(f"[AGENT] 📴 end_call() invoked by LLM for {call_id}")
+
+        end_call_tool = EndCallTool(
+            delete_room=False,
+            end_instructions="Thank the customer politely in Hindi Devanagari: 'आपके मूल्यवान फ़ीडबैक और समय देने के लिए धन्यवाद। आपका दिन शुभ हो।' For sensitive situations, express empathy and end politely.",
+            on_tool_called=_on_end_call_invoked,
+        )
+
         super().__init__(
             instructions="""
 You are an intelligent AI voice assistant acting as an experienced, empathetic FEMALE customer service representative from एल एंड टी फाइनेंस, calling customers for payment feedback.
@@ -148,8 +157,9 @@ Never argue or pressure.
 When you learn or confirm any of the above information, store it using the provided tools: store_identity_confirmed, store_loan_taken, store_last_month_payment, store_payee, store_payment_amount, store_payment_date, store_payment_mode, store_payment_reason, store_payee_details, store_field_executive, and complete_survey when the customer confirms the summary.
 
 📴 CALL ENDING (MANDATORY)
-After you say your closing statement you MUST call end_call() to disconnect the phone call. - NEVER forget to call end_call().
+When the conversation is ending (after confirmation, sensitive situation, or refusal), call end_call() to disconnect. The system will play your closing statement before hanging up. NEVER forget to call end_call().
             """ + name_hint,
+            tools=end_call_tool.tools,
         )
 
     def _store(self, key: str, value):
@@ -292,38 +302,4 @@ After you say your closing statement you MUST call end_call() to disconnect the 
         feedback_sessions[self._call_id]["category"] = "COMPLETE_SURVEY"
         asyncio.create_task(persist_feedback_to_db(self._call_id))
 
-        # NOTE: We do NOT set the call_end_signal here because the LLM still
-        # needs to generate the closing statement and TTS needs to play it.
-        # The signal is set from web_rtc_server.py's conversation_item_added
-        # handler once the closing assistant message is committed.
-
-        return f"Survey completed, confirmed={confirmed}. End the call politely and then call end_call() function_tool"
-
-    @function_tool()
-    async def end_call(self, ctx: RunContext) -> str:
-        """
-        Call this AFTER you have said your final closing statement to disconnect the phone call.
-        Must be called in every scenario where the conversation is ending.
-        """
-        if not self._call_id:
-            return "No call_id available."
-
-        call_id = self._call_id
-        print(f"[AGENT] 📴 end_call() invoked by LLM for {call_id}")
-
-        # Hook into the current speech handle so the hangup only fires AFTER
-        # the closing TTS utterance finishes playing — not before it starts.
-        # This mirrors how LiveKit's own EndCallTool works (speech_handle.add_done_callback).
-        def _on_speech_done(_speech_handle) -> None:
-            end_signal = call_end_signals.get(call_id)
-            if end_signal and not end_signal.is_set():
-                print(f"[AGENT] 🔇 Speech handle done — setting hangup signal for {call_id}")
-                end_signal.set()
-
-        if ctx.speech_handle is not None:
-            ctx.speech_handle.add_done_callback(_on_speech_done)
-        else:
-            # No active speech handle (agent wasn't speaking) — fire immediately
-            _on_speech_done(None)
-
-        return "Closing. The phone line will disconnect once the end message finishes."
+        return f"Survey completed, confirmed={confirmed}. Now call end_call() to end the call."

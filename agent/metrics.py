@@ -6,7 +6,6 @@ from typing import Callable, Optional
 
 from livekit.agents import metrics, MetricsCollectedEvent
 
-
 _S_TO_MS = 1000.0
 
 
@@ -67,8 +66,8 @@ class ThresholdAlert:
 class MetricsTracker:
     _STT_LIMIT_MS = 500.0
     _LLM_TTFT_LIMIT_MS = 1000.0
-    _LLM_LIMIT_MS = 2000.0
     _TTS_LIMIT_MS = 600.0
+    _LLM_LIMIT_MS = 2000.0
     _TOTAL_LIMIT_MS = 3000.0
 
     def __init__(self) -> None:
@@ -166,15 +165,26 @@ class MetricsTracker:
         print("─" * 70)
 
     def _print_cost_estimate(self, usage) -> None:
-        llm_cost = (usage.llm_prompt_tokens * 0.0005 + usage.llm_completion_tokens * 0.0015) / 1000
-        stt_cost = usage.stt_audio_duration * 0.025 / 60
-        tts_cost = usage.tts_characters_count * 0.000015
+        INPUT_COST_PER_TOKEN = 0.10 / 1_000_000
+        OUTPUT_COST_PER_TOKEN = 0.40 / 1_000_000
+        usd_to_inr = 95.0
+
+
+        llm_cost = (
+                usage.llm_prompt_tokens * INPUT_COST_PER_TOKEN +
+                usage.llm_completion_tokens * OUTPUT_COST_PER_TOKEN
+        )
+        stt_cost = (usage.stt_audio_duration / 60) * 0.0058
+        tts_cost = (usage.tts_characters_count / 10000) * 0.33
+
+        total = llm_cost + stt_cost + tts_cost
+
         print("\n💰 COST ESTIMATE")
         print("─" * 70)
-        print(f"LLM:                     ${llm_cost:>10.6f}")
-        print(f"STT:                     ${stt_cost:>10.6f}")
-        print(f"TTS:                     ${tts_cost:>10.6f}")
-        print(f"Total:                   ${llm_cost + stt_cost + tts_cost:>10.6f}")
+        print(f"LLM:                     ${llm_cost:>10.6f}  (Rs.{llm_cost * usd_to_inr:>10.4f})")
+        print(f"STT:                     ${stt_cost:>10.6f}  (Rs.{stt_cost * usd_to_inr:>10.4f})")
+        print(f"TTS:                     ${tts_cost:>10.6f}  (Rs.{tts_cost * usd_to_inr:>10.4f})")
+        print(f"Total:                   ${total:>10.6f}  (Rs.{total * usd_to_inr:>10.4f})")
         print("─" * 70)
 
     def _print_alerts(self) -> None:
