@@ -5,6 +5,19 @@ on:
     branches:
       - main
       - dev
+    paths:
+      - 'smart-flo/**'
+      - 'smartflo.Dockerfile'
+      - 'api/**'
+      - 'db/**'
+      - 'frontend/src/**'
+      - 'frontend/public/**'
+      - 'frontend/package.json'
+      - 'frontend/yarn.lock'
+      - 'frontend/package-lock.json'
+      - 'requirements.txt'
+      - 'requirements-build.txt'
+      - 'setup.py'
   workflow_dispatch:
 
 jobs:
