@@ -26,7 +26,7 @@ for _noisy in (
         "livekit.plugins.noise_cancellation",
         "httpx",
         "httpcore",
-        "google.genai",
+        "google_genai",
         "grpc",
 ):
     logging.getLogger(_noisy).setLevel(logging.WARNING)
@@ -302,15 +302,7 @@ async def my_agent(ctx: agents.JobContext):
         name_part = f"{hindi_name} जी" if hindi_name else "आप"
         greeting_text = f"नमस्ते, मैं एल एंड टी फाइनेंस की तरफ़ से बात कर रही हूँ। यह कॉल आपके पेमेंट अनुभव को जानने के लिए है। क्या मेरी बात {name_part} से हो रही है?"
         print(f"🗣️ Greeting: {greeting_text}")
-        try:
-            await asyncio.wait_for(
-                session.say(greeting_text, allow_interruptions=True),
-                timeout=15.0,
-            )
-        except asyncio.TimeoutError:
-            print(f"⚠️ Greeting TTS timed out after 15s - session will continue without greeting")
-        except Exception as e:
-            print(f"⚠️ Greeting failed: {e} - session will continue")
+        session.say(greeting_text, allow_interruptions=True)
 
         # Keep session alive until the room disconnects (or hangup completes)
         disconnect_event = asyncio.Event()
