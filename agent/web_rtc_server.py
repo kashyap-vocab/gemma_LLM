@@ -320,25 +320,31 @@ async def my_agent(ctx: agents.JobContext):
             disconnect_event.set()
 
         # When EndCallTool triggers session.shutdown() (after TTS finishes),
-        # the session emits "close". We hook into that to send the hangup
-        # data message that tells the SmartFlo bridge to disconnect PSTN.
+        # the session emits "close". Just unblock the entrypoint so it can
+        # proceed to the finally block (where hangup is sent while room is
+        # still connected — room.disconnect() happens AFTER entrypoint returns).
         def on_session_close(ev):
-            async def _send_hangup():
-                await asyncio.sleep(0.5)  # buffer for audio to flush through bridge
-                try:
-                    hangup_msg = _json.dumps({"action": "hangup"}).encode("utf-8")
-                    await ctx.room.local_participant.publish_data(hangup_msg, reliable=True)
-                    print(f"[AGENT] 📴 Hangup data message sent to room {call_id}")
-                except Exception as e:
-                    print(f"[AGENT] ❌ Failed to send hangup data message: {e}")
-                disconnect_event.set()
-            asyncio.create_task(_send_hangup())
+            disconnect_event.set()
 
         session.once("close", on_session_close)
 
         await disconnect_event.wait()
 
     finally:
+        # Send hangup to SmartFlo bridge while room is still connected.
+        # (LiveKit's shutdown sequence: entrypoint returns → session.aclose()
+        #  → room.disconnect(), so the room is alive here.)
+        await asyncio.sleep(0.5)  # buffer for final audio to flush
+        try:
+            hangup_msg = _json.dumps({"action": "hangup"}).encode("utf-8")
+            await asyncio.wait_for(
+                ctx.room.local_participant.publish_data(hangup_msg, reliable=True),
+                timeout=2.0,
+            )
+            print(f"[AGENT] 📴 Hangup data message sent to room {call_id}")
+        except Exception as e:
+            print(f"[AGENT] ❌ Failed to send hangup: {e}")
+
         print("\n\n🛑 Session ending...")
         tracker.print_session_summary()
 
