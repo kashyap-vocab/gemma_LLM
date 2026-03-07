@@ -323,32 +323,14 @@ async def my_agent(ctx: agents.JobContext):
             disconnect_event.set()
 
         async def _wait_and_signal_hangup():
-            """Wait for end_call() signal, wait for TTS to finish, then hang up."""
+            """Wait for end_call() signal, then hang up.
+
+            The signal is set from survey_agent.end_call() via speech_handle.add_done_callback(),
+            so it only fires AFTER the closing TTS utterance has finished playing.
+            No need to poll agent_state_changed here — the timing is already correct.
+            """
             await call_end_signals[call_id].wait()
-            print(f"[AGENT] 📴 Call end signal received for {call_id}, waiting for TTS to finish...")
-
-            # Wait until the agent stops speaking so the full closing statement plays.
-            # AgentSession emits "agent_state_changed"; we watch for a transition
-            # away from "speaking" (→ listening/thinking) to know TTS has drained.
-            speech_done = asyncio.Event()
-
-            @session.on("agent_state_changed")
-            def _on_agent_state_changed(ev):
-                from livekit.agents.voice.events import AgentState
-
-                if ev.old_state == "speaking":
-                    speech_done.set()
-
-            # If the agent is already not speaking (e.g. end_call called after silence),
-            # set immediately so we don't wait unnecessarily.
-            if session.agent_state != "speaking":
-                speech_done.set()
-
-            try:
-                await asyncio.wait_for(speech_done.wait(), timeout=10.0)
-                print(f"[AGENT] 🔇 Agent finished speaking, sending hangup...")
-            except asyncio.TimeoutError:
-                print(f"[AGENT] ⚠️ Timeout waiting for speech to finish, forcing hangup")
+            print(f"[AGENT] 📴 Hangup signal received for {call_id} (TTS already drained)")
 
             await asyncio.sleep(0.5)  # Small buffer for audio to flush through bridge
 

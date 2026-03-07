@@ -1,5 +1,5 @@
 import asyncio
-from livekit.agents import Agent, function_tool
+from livekit.agents import Agent, RunContext, function_tool
 from agent.db_storage import feedback_sessions, _default_feedback_session, persist_feedback_to_db
 
 # Shared signals: when complete_survey() is called, the event is set
@@ -297,19 +297,33 @@ After you say your closing statement you MUST call end_call() to disconnect the 
         # The signal is set from web_rtc_server.py's conversation_item_added
         # handler once the closing assistant message is committed.
 
-        return f"Survey completed, confirmed={confirmed}. End the call politely by saying आपके मूल्यवान फ़ीडबैक और समय देने के लिए धन्यवाद। आपका दिन शुभ हो।, then call end_call() function_tool"
+        return f"Survey completed, confirmed={confirmed}. End the call politely and then call end_call() function_tool"
 
     @function_tool()
-    async def end_call(self) -> str:
+    async def end_call(self, ctx: RunContext) -> str:
         """
         Call this AFTER you have said your final closing statement to disconnect the phone call.
         Must be called in every scenario where the conversation is ending.
         """
         if not self._call_id:
             return "No call_id available."
-        end_signal = call_end_signals.get(self._call_id)
-        if end_signal and not end_signal.is_set():
-            end_signal.set()
-            print(f"[AGENT] 📴 end_call() invoked by LLM for {self._call_id}")
-            return "Call end signal sent. The phone line will disconnect shortly."
-        return "Call end signal already sent or not available."
+
+        call_id = self._call_id
+        print(f"[AGENT] 📴 end_call() invoked by LLM for {call_id}")
+
+        # Hook into the current speech handle so the hangup only fires AFTER
+        # the closing TTS utterance finishes playing — not before it starts.
+        # This mirrors how LiveKit's own EndCallTool works (speech_handle.add_done_callback).
+        def _on_speech_done(_speech_handle) -> None:
+            end_signal = call_end_signals.get(call_id)
+            if end_signal and not end_signal.is_set():
+                print(f"[AGENT] 🔇 Speech handle done — setting hangup signal for {call_id}")
+                end_signal.set()
+
+        if ctx.speech_handle is not None:
+            ctx.speech_handle.add_done_callback(_on_speech_done)
+        else:
+            # No active speech handle (agent wasn't speaking) — fire immediately
+            _on_speech_done(None)
+
+        return "Closing. The phone line will disconnect once the end message finishes."
