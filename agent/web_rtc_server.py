@@ -307,7 +307,7 @@ server = agents.WorkerOptions(
     entrypoint_fnc=my_agent,
     prewarm_fnc=prewarm,
     num_idle_processes=5,
-    shutdown_process_timeout=30,  # This time is needed to make db connection and update the data. This can be removed after ORM classes.
+    shutdown_process_timeout=180,  # This time is needed to make db connection and update the data. This can be removed after ORM classes.
 )
 
 if __name__ == "__main__":
