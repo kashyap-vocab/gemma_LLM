@@ -12,7 +12,7 @@ class SurveyAssistant(Agent):
         # Build instructions with customer name hint if available
         name_hint = ""
         if customer_name:
-            name_hint = f"\n\nग्राहक का नाम: {customer_name} है। शुरुआत में सिर्फ एक बार \"{customer_name} जी\" बोल कर सम्बोधित करो, फिर नाम दोबारा मत लो, सिर्फ \"आप\" बोलो।"
+            name_hint = f"\n\nग्राहक का नाम: {customer_name} है। अभिवादन पहले ही बोला जा चुका है। दोबारा अभिवादन मत करो। अब से सिर्फ \"आप\" बोलो।"
 
         # Track end_call invocation in feedback session for observability
         async def _on_end_call_invoked(ev):
@@ -161,6 +161,11 @@ When the conversation is ending (after confirmation, sensitive situation, or ref
             """ + name_hint,
             tools=end_call_tool.tools,
         )
+
+    async def on_enter(self):
+        name_part = f"{self._customer_name} जी" if self._customer_name else "आप"
+        greeting = f"नमस्ते, मैं एल एंड टी फाइनेंस की तरफ़ से बात कर रही हूँ। यह कॉल आपके पेमेंट अनुभव को जानने के लिए है। क्या मेरी बात {name_part} से हो रही है?"
+        self.session.say(greeting, allow_interruptions=True)
 
     def _store(self, key: str, value):
         """Helper to store a value in the feedback session."""

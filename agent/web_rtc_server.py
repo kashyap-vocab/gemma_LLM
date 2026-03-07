@@ -32,7 +32,6 @@ for _noisy in (
     logging.getLogger(_noisy).setLevel(logging.WARNING)
 
 from dotenv import load_dotenv
-from google import genai
 from google.genai import types
 from livekit import agents, rtc
 from livekit.agents import (
@@ -118,24 +117,7 @@ async def my_agent(ctx: agents.JobContext):
     except Exception as e:
         print(f"Warning: Could not parse room metadata: {e}")
 
-    # Priority 2: Participant metadata (fallback for backward compatibility)
-    if not customer_phone:
-        try:
-            await asyncio.sleep(0.5)
-            for participant in ctx.room.remote_participants.values():
-                if participant.metadata:
-                    try:
-                        metadata = _json.loads(participant.metadata)
-                        customer_phone = metadata.get("customer_phone")
-                        if customer_phone:
-                            print(f"📞 Got customer_phone from participant metadata: {customer_phone}")
-                            break
-                    except _json.JSONDecodeError:
-                        pass
-        except Exception as e:
-            print(f"Warning: Could not extract customer_phone from participant metadata: {e}")
-
-    # Priority 3: DB lookup (fallback)
+    # Priority 2: DB lookup (fallback)
     if not customer_name:
         db_phone, db_name = load_call_metadata(call_id, customer_phone=customer_phone)
         customer_phone = customer_phone or db_phone
@@ -145,25 +127,6 @@ async def my_agent(ctx: agents.JobContext):
     feedback_sessions[call_id] = _default_feedback_session(call_id)
     if customer_name:
         feedback_sessions[call_id]["customer_name"] = customer_name
-
-    # Start transliteration NOW (parallel with session setup below).
-    # This avoids blocking the greeting after session.start() — previously
-    # the greeting was delayed up to 5 s waiting for this API call.
-    async def _transliterate(name: str) -> str:
-        try:
-            client = genai.Client()
-            resp = await client.aio.models.generate_content(
-                model="gemini-2.0-flash",
-                contents=f"Convert this Indian name from English to Hindi Devanagari script. Reply with ONLY the Devanagari name, nothing else: {name}",
-            )
-            return resp.text.strip()
-        except Exception as e:
-            print(f"⚠️ Transliteration error: {e}")
-            return name
-
-    transliteration_task = (
-        asyncio.create_task(_transliterate(customer_name)) if customer_name else None
-    )
 
     print(f"\n🎯 SESSION START")
     print(f"Room: {call_id}")
@@ -264,46 +227,6 @@ async def my_agent(ctx: agents.JobContext):
             ),
         )
 
-        # Debug: log remote participants and their published tracks right after session start
-        try:
-            print("🔎 Remote participants at session start:")
-            for pid, participant in ctx.room.remote_participants.items():
-                try:
-                    pubs = getattr(participant, 'tracks', None) or getattr(participant, 'published_tracks', None) or []
-                    track_info = []
-                    for t in pubs:
-                        try:
-                            track_info.append(
-                                f"{getattr(t, 'name', getattr(t, 'sid', 'unknown'))}:{getattr(t, 'kind', 'unknown')}")
-                        except Exception:
-                            pass
-                    print(f" - {participant.identity} ({participant.sid}) tracks={track_info}")
-                except Exception:
-                    print(f" - {participant} (could not list tracks)")
-        except Exception as e:
-            print(f"Warning: could not enumerate remote participants: {e}")
-        # Collect transliteration result — task was started before session.start()
-        # so it has been running in parallel during session setup. In most cases
-        # it finishes long before we reach this point; wait at most 1 s for it.
-        hindi_name = customer_name  # safe default
-        if transliteration_task is not None:
-            try:
-                hindi_name = await asyncio.wait_for(
-                    asyncio.shield(transliteration_task), timeout=1.0
-                )
-                print(f"📝 Transliterated name: {customer_name} → {hindi_name}")
-            except asyncio.TimeoutError:
-                print(f"⚠️ Transliteration still running after 1s, using original name")
-                transliteration_task.cancel()
-            except Exception as e:
-                print(f"⚠️ Transliteration failed, using original: {e}")
-
-        # Dynamic greeting with customer name via TTS
-        name_part = f"{hindi_name} जी" if hindi_name else "आप"
-        greeting_text = f"नमस्ते, मैं एल एंड टी फाइनेंस की तरफ़ से बात कर रही हूँ। यह कॉल आपके पेमेंट अनुभव को जानने के लिए है। क्या मेरी बात {name_part} से हो रही है?"
-        print(f"🗣️ Greeting: {greeting_text}")
-        session.say(greeting_text, allow_interruptions=True)
-
         # Keep session alive until the room disconnects (or hangup completes)
         disconnect_event = asyncio.Event()
 
@@ -383,7 +306,8 @@ server = agents.WorkerOptions(
     agent_name="LTFS_SurveyAgent-Soma",
     entrypoint_fnc=my_agent,
     prewarm_fnc=prewarm,
-    num_idle_processes=5,  # pre-warm 5 slots = 5 simultaneous calls, zero latency
+    num_idle_processes=5,
+    shutdown_process_timeout=30,  # This time is needed to make db connection and update the data. This can be removed after ORM classes.
 )
 
 if __name__ == "__main__":
