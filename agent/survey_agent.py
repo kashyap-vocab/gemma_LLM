@@ -297,7 +297,7 @@ After you say your closing statement you MUST call end_call() to disconnect the 
         # The signal is set from web_rtc_server.py's conversation_item_added
         # handler once the closing assistant message is committed.
 
-        return f"Survey completed, confirmed={confirmed}. End the call politely, then call end_call() function_tool"
+        return f"Survey completed, confirmed={confirmed}. End the call politely by saying आपके मूल्यवान फ़ीडबैक और समय देने के लिए धन्यवाद। आपका दिन शुभ हो।, then call end_call() function_tool"
 
     @function_tool()
     async def end_call(self) -> str:
