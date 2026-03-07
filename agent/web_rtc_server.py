@@ -55,7 +55,7 @@ from agent.db_storage import (
     _load_call_metadata as load_call_metadata,
     feedback_sessions,
     _default_feedback_session,
-    store_conversation_turn,          # ← real-time per-turn async writer
+    store_conversation_turn,  # ← real-time per-turn async writer
 )
 
 
@@ -187,7 +187,7 @@ async def my_agent(ctx: agents.JobContext):
     )
 
     session = AgentSession(
-        turn_detection=MultilingualModel(),
+        turn_detection=MultilingualModel(),  # type: ignore[arg-type]
         min_endpointing_delay=0.1,
         max_endpointing_delay=0.4,
         stt=ctx.proc.userdata["stt"],
@@ -312,14 +312,46 @@ async def my_agent(ctx: agents.JobContext):
         except Exception as e:
             print(f"⚠️ Greeting failed: {e} - session will continue")
 
-        # Register a call-end signal so complete_survey() can trigger hangup
+        # Register a call-end signal so end_call() can trigger hangup
         call_end_signals[call_id] = asyncio.Event()
 
+        # Keep session alive until the room disconnects (or hangup completes)
+        disconnect_event = asyncio.Event()
+
+        @ctx.room.on("disconnected")
+        def on_room_disconnect():
+            disconnect_event.set()
+
         async def _wait_and_signal_hangup():
-            """Wait for complete_survey() signal, then tell the bridge to hang up."""
+            """Wait for end_call() signal, wait for TTS to finish, then hang up."""
             await call_end_signals[call_id].wait()
-            print(f"[AGENT] 📴 Call end signal received for {call_id}, waiting 1.5s for TTS to finish...")
-            await asyncio.sleep(1.5)  # Allow closing statement TTS to play
+            print(f"[AGENT] 📴 Call end signal received for {call_id}, waiting for TTS to finish...")
+
+            # Wait until the agent stops speaking so the full closing statement plays.
+            # AgentSession emits "agent_state_changed"; we watch for a transition
+            # away from "speaking" (→ listening/thinking) to know TTS has drained.
+            speech_done = asyncio.Event()
+
+            @session.on("agent_state_changed")
+            def _on_agent_state_changed(ev):
+                from livekit.agents.voice.events import AgentState
+
+                if ev.old_state == "speaking":
+                    speech_done.set()
+
+            # If the agent is already not speaking (e.g. end_call called after silence),
+            # set immediately so we don't wait unnecessarily.
+            if session.agent_state != "speaking":
+                speech_done.set()
+
+            try:
+                await asyncio.wait_for(speech_done.wait(), timeout=10.0)
+                print(f"[AGENT] 🔇 Agent finished speaking, sending hangup...")
+            except asyncio.TimeoutError:
+                print(f"[AGENT] ⚠️ Timeout waiting for speech to finish, forcing hangup")
+
+            await asyncio.sleep(0.5)  # Small buffer for audio to flush through bridge
+
             try:
                 import json as _j
                 hangup_msg = _j.dumps({"action": "hangup"}).encode("utf-8")
@@ -328,15 +360,11 @@ async def my_agent(ctx: agents.JobContext):
             except Exception as e:
                 print(f"[AGENT] ❌ Failed to send hangup data message: {e}")
 
-        asyncio.create_task(_wait_and_signal_hangup())
-
-        # Keep session alive until the room disconnects
-        # Without this, the function returns and kills the agent mid-conversation
-        disconnect_event = asyncio.Event()
-
-        @ctx.room.on("disconnected")
-        def on_room_disconnect():
+            # Explicitly unblock the session so it always exits cleanly,
+            # regardless of whether LiveKit server auto-closes the room.
             disconnect_event.set()
+
+        asyncio.create_task(_wait_and_signal_hangup())
 
         await disconnect_event.wait()
 
@@ -390,7 +418,7 @@ server = agents.WorkerOptions(
     agent_name="LTFS_SurveyAgent-Soma",
     entrypoint_fnc=my_agent,
     prewarm_fnc=prewarm,
-    num_idle_processes=5,   # pre-warm 5 slots = 5 simultaneous calls, zero latency
+    num_idle_processes=5,  # pre-warm 5 slots = 5 simultaneous calls, zero latency
 )
 
 if __name__ == "__main__":
