@@ -322,10 +322,10 @@ async def trigger_call(request: CallTriggerRequest, db: Session = Depends(get_db
 
 @router.get("/customers/download")
 async def download_data(
-    start: str = Query(default=""),
-    end: str = Query(default=""),
-    disposition: str = Query(default="All"),
-    table: str = Query(default="customer_feedback"),
+    start=Query(default=""),
+    end=Query(default=""),
+    disposition=Query(default="All"),
+    table=Query(default="customer_feedback"),
     db: Session = Depends(get_db),
 ):
     """
