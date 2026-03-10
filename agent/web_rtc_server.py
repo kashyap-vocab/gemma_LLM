@@ -180,10 +180,9 @@ async def my_agent(ctx: agents.JobContext):
     )
 
     session = AgentSession(
-        turn_detection=agents.vad.VADTurnDetector(
-            min_endpointing_delay=0.1,
-            max_endpointing_delay=0.5,
-        ),
+        turn_detection=MultilingualModel(),  # type: ignore[arg-type]
+        min_endpointing_delay=0.1,
+        max_endpointing_delay=0.4,
         stt=ctx.proc.userdata["stt"],
         llm=ctx.proc.userdata["llm"],
         tts=session_tts,
