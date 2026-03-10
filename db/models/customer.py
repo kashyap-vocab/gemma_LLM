@@ -4,23 +4,23 @@ Customer ORM model.
 Maps to: CUSTOMER_TABLE
 Primary key: agreement_no (business key from the loan agreement)
 """
-from sqlalchemy import Column, BigInteger, String, Boolean, Date, DateTime, Index
+from sqlalchemy import Column, BigInteger, String, Boolean, Date, DateTime, Index, Sequence
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
 from db.database import Base
 
+customer_id_seq = Sequence("customer_id_seq", start=1)
+
 
 class Customer(Base):
-    __tablename__ = "customer"
+    __tablename__ = "customer_data"
 
     # Business PK — agreement number from LTFS loan system
     agreement_no = Column(String(64), primary_key=True, nullable=False)
 
     # Auto-incrementing numeric identifier (1, 2, 3, …)
-    # The DEFAULT is set at the DB level by init_db / lifespan startup — not in the
-    # ORM model — so that CREATE TABLE succeeds even before the sequence exists.
-    id = Column(BigInteger, nullable=True)
+    id = Column(BigInteger, customer_id_seq, server_default=customer_id_seq.next_value(), nullable=True)
 
     # Upload batch identifier — shared by all records from the same Excel upload
     upload_id = Column(String(64), nullable=True)

@@ -41,7 +41,7 @@ class CustomerFeedback(Base):
     # FK to Customer
     agreement_no = Column(
         String(64),
-        ForeignKey("customer.agreement_no", ondelete="SET NULL"),
+        ForeignKey("customer_data.agreement_no", ondelete="SET NULL"),
         nullable=True,
         index=True,
     )

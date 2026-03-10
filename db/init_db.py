@@ -18,24 +18,9 @@ load_dotenv()
 def init_db() -> None:
     """Create all database tables from ORM models (no-op if they already exist)."""
     print("Creating database tables...")
-    from sqlalchemy import text
     try:
-        with engine.connect() as conn:
-            # 1. Create sequence FIRST so CREATE TABLE can reference it
-            conn.execute(text("CREATE SEQUENCE IF NOT EXISTS customer_id_seq START 1"))
-            conn.commit()
-
-        # 2. Create all tables (customer.id is plain BIGINT here, no DEFAULT yet)
         Base.metadata.create_all(bind=engine)
-
-        # 3. Wire the sequence as the column default
-        with engine.connect() as conn:
-            conn.execute(text(
-                "ALTER TABLE customer ALTER COLUMN id SET DEFAULT nextval('customer_id_seq')"
-            ))
-            conn.commit()
-
-        print("Database tables and sequences created successfully.")
+        print("Database tables created successfully.")
     except Exception as exc:
         print(f"Error creating tables: {exc}")
         raise

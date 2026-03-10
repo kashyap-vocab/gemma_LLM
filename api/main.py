@@ -27,18 +27,14 @@ from api.auto_dialer import router as auto_dialer_router
 # Import Smartflo bridge WebSocket handler
 from smartflow_bridge import smartflo_websocket_endpoint
 
-from sqlalchemy import text
-
-from db.database import engine
+from db.database import engine, Base
+from db.models import Customer, CallMetadata, Conversation, CustomerFeedback  # noqa: F401
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    # Ensure the customer_id sequence exists before any upload INSERT runs.
-    # Safe to call on every startup — CREATE SEQUENCE IF NOT EXISTS is idempotent.
-    with engine.connect() as conn:
-        conn.execute(text("CREATE SEQUENCE IF NOT EXISTS customer_id_seq START 1"))
-        conn.commit()
+    # Create all tables and sequences on startup (no-op if they already exist)
+    Base.metadata.create_all(bind=engine)
     yield
 
 
