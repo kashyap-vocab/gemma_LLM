@@ -33,7 +33,7 @@ RUN python setup.py build_ext --inplace
 RUN cp /app/*.so /app/agent/ 2>/dev/null || true
 
 # Strip debug symbols from compiled files
-RUN find /app/agent -name "*.so" -exec strip {} \;
+RUN find /app/agent /app/db -name "*.so" -exec strip {} \;
 
 # Create __init__.py to make agent a package
 RUN touch /app/agent/__init__.py
@@ -50,7 +50,10 @@ RUN rm -f /app/agent/db_storage.py \
     /app/api/customer_api.py \
     /app/api/smartflo_client.py \
     /app/db/database.py \
-    /app/db/models.py \
+    /app/db/models/customer.py \
+    /app/db/models/call_metadata.py \
+    /app/db/models/conversation.py \
+    /app/db/models/customer_feedback.py \
     /app/db/utils.py \
     /app/smart-flo/smartflow_bridge.py
 
@@ -78,6 +81,7 @@ RUN pip install --no-cache-dir --no-index --find-links /wheels -r /app/requireme
 
 # Copy ONLY what's needed for runtime
 COPY --from=builder /app/agent/ /app/agent/
+COPY --from=builder /app/db/ /app/db/
 COPY --from=builder /app/start_agent.py /app/start_agent.py
 
 # Download model files during build to include them in the image

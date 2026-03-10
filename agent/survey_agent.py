@@ -1,7 +1,6 @@
 import asyncio
 from livekit.agents import Agent, function_tool
 from livekit.agents.beta.tools import EndCallTool
-from agent.db_storage import feedback_sessions, _default_feedback_session, persist_feedback_to_db
 
 
 class SurveyAssistant(Agent):
@@ -18,8 +17,9 @@ class SurveyAssistant(Agent):
 
         # Track end_call invocation in feedback session for observability
         async def _on_end_call_invoked(ev):
+            from agent.db_storage import feedback_sessions, _default_feedback_session
             if call_id:
-                feedback_sessions.setdefault(call_id, _default_feedback_session(call_id))["end_call_invoked"] = True
+                feedback_sessions.setdefault(call_id, _default_feedback_session())["end_call_invoked"] = True
                 print(f"[AGENT] 📴 end_call() invoked by LLM for {call_id}")
 
         end_call_tool = EndCallTool(
@@ -169,6 +169,8 @@ When the conversation is ending (after confirmation, sensitive situation, or ref
 
     def _store(self, key: str, value):
             """Helper to store a value in the feedback session."""
+            from agent.db_storage import feedback_sessions, _default_feedback_session
+
             if not self._call_id:
                 return
             session = feedback_sessions.setdefault(self._call_id, _default_feedback_session())
@@ -179,6 +181,7 @@ When the conversation is ending (after confirmation, sensitive situation, or ref
 
     def _store_payment(self, key: str, value: str):
             """Helper to store a payment detail."""
+            from agent.db_storage import feedback_sessions, _default_feedback_session
             if not self._call_id:
                 return
             session = feedback_sessions.setdefault(self._call_id, _default_feedback_session())
@@ -240,6 +243,8 @@ When the conversation is ending (after confirmation, sensitive situation, or ref
         Args:
             amount: The amount paid, e.g. 5555
         """
+        from agent.db_storage import feedback_sessions
+
         print(f"🔍 [DEBUG] store_payment_amount called with: {amount} (type: {type(amount)})")
         self._store_payment("amount", amount)
         print(f"🔍 [DEBUG] Payment stored in session: {feedback_sessions.get(self._call_id, {}).get('payment', {})}")
@@ -308,6 +313,7 @@ When the conversation is ending (after confirmation, sensitive situation, or ref
         Args:
             confirmed: True if customer said the summary is correct, False if they want to correct
         """
+        from agent.db_storage import feedback_sessions, _default_feedback_session, persist_feedback_to_db
         if not self._call_id:
             return "No call_id available."
 
