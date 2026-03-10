@@ -10,7 +10,8 @@ RUN npm ci --prefer-offline --no-audit
 
 # Copy frontend source
 COPY frontend/src ./src
-COPY frontend/public ./public
+COPY frontend/index.html ./index.html
+COPY frontend/postcss.config.js frontend/tailwind.config.js frontend/vite.config.js ./
 
 # Build React app
 RUN npm run build
@@ -68,7 +69,10 @@ RUN rm -f /app/agent/db_storage.py \
     /app/api/customer_api.py \
     /app/api/smartflo_client.py \
     /app/db/database.py \
-    /app/db/models.py \
+    /app/db/models/customer.py \
+    /app/db/models/call_metadata.py \
+    /app/db/models/conversation.py \
+    /app/db/models/customer_feedback.py \
     /app/db/utils.py \
     /app/smart-flo/smartflow_bridge.py
 

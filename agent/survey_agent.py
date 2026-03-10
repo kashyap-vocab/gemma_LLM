@@ -19,7 +19,7 @@ class SurveyAssistant(Agent):
         # Track end_call invocation in feedback session for observability
         async def _on_end_call_invoked(ev):
             if call_id:
-                feedback_sessions.setdefault(call_id, _default_feedback_session(call_id))["end_call_invoked"] = True
+                feedback_sessions.setdefault(call_id, _default_feedback_session())["end_call_invoked"] = True
                 print(f"[AGENT] 📴 end_call() invoked by LLM for {call_id}")
 
         end_call_tool = EndCallTool(
