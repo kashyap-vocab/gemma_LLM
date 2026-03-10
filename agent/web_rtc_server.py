@@ -62,10 +62,7 @@ call_end_signals: dict[str, asyncio.Event] = {}
 
 def prewarm(proc: agents.JobProcess):
     print("🔥 PREWARMING MODELS...")
-    proc.userdata["vad"] = silero.VAD.load(
-        sample_rate=8000, 
-        activation_threshold=0.6 
-    )
+    proc.userdata["vad"] = silero.VAD.load()
     proc.userdata["stt"] = deepgram.STT(model="nova-2", language="hi")
     proc.userdata["llm"] = google.LLM(
         model="gemini-2.0-flash",
