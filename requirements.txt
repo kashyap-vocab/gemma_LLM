@@ -16,3 +16,4 @@ audioop-lts; python_version >= "3.13"
 pandas
 openpyxl
 sqlalchemy>=2.0.0
+psycopg2-binary
