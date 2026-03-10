@@ -18,6 +18,7 @@ from db.models import CallMetadata
 
 load_dotenv()
 
+
 # ── Updated Database Helpers (ORM) ───────────────────────────────────────────
 
 def _set_call_status_active(room_name: str) -> None:
@@ -35,6 +36,7 @@ def _set_call_status_active(room_name: str) -> None:
             db.rollback()
             print(f"[BRIDGE] ⚠️ ORM Error (Active): {e}")
 
+
 def _set_call_status_terminal(room_name: str, status: str = "completed") -> None:
     """Ensure the Auto-Dialer stops polling by setting a terminal status via ORM."""
     with SessionLocal() as db:
@@ -49,6 +51,7 @@ def _set_call_status_terminal(room_name: str, status: str = "completed") -> None
             db.rollback()
             print(f"[BRIDGE] ⚠️ ORM Error (Terminal): {e}")
 
+
 # ── App Logic ────────────────────────────────────────────────────────────────
 
 app = FastAPI()
@@ -58,12 +61,14 @@ LIVEKIT_API_KEY = os.getenv('LIVEKIT_API_KEY')
 LIVEKIT_API_SECRET = os.getenv('LIVEKIT_API_SECRET')
 SMARTFLO_FROM_NUMBER = os.getenv('SMARTFLO_FROM_NUMBER') or os.getenv('SMARTFLO_PHONE_NUMBER', '')
 
+
 def normalize_phone(number: str) -> str:
     if not number: return number
     clean = str(number).strip().replace(" ", "").replace("-", "").lstrip('+')
     if clean.startswith('91') and len(clean) > 10:
         clean = clean[2:]
     return clean
+
 
 class SmartfloLiveKitBridge:
     def __init__(self, stream_sid: str, call_sid: str, account_sid: str,
@@ -75,7 +80,7 @@ class SmartfloLiveKitBridge:
         # Resolve customer phone to match Route 1 naming convention
         self.customer_phone = self._resolve_customer_phone(from_number, to_number)
         self.room_name = f"call-{self.customer_phone}"
-        
+
         self.room = None
         self.audio_source = None
         self.audio_track = None
@@ -95,8 +100,14 @@ class SmartfloLiveKitBridge:
 
     async def setup_livekit(self):
         token = api.AccessToken(LIVEKIT_API_KEY, LIVEKIT_API_SECRET) \
-            .with_identity(f"bridge-{self.call_sid}") \
-            .with_grants(api.VideoGrants(room_join=True, room=self.room_name, can_publish=True))
+            .with_identity(f"smartflo-caller-{self.call_sid}") \
+            .with_name("Phone Caller") \
+            .with_grants(api.VideoGrants(
+            room_join=True,
+            room=self.room_name,
+            can_publish=True,
+            can_subscribe=True,
+        ))
 
         self.room = rtc.Room()
 
@@ -111,12 +122,15 @@ class SmartfloLiveKitBridge:
                 payload = json.loads(data.data.decode("utf-8"))
                 if payload.get("action") == "hangup":
                     self._closed.set()
-            except: pass
+            except:
+                pass
 
         await self.room.connect(LIVEKIT_URL, token.to_jwt())
         self.audio_source = rtc.AudioSource(8000, 1)
         self.audio_track = rtc.LocalAudioTrack.create_audio_track("smartflo-audio", self.audio_source)
-        await self.room.local_participant.publish_track(self.audio_track)
+        options = rtc.TrackPublishOptions()
+        options.source = rtc.TrackSource.SOURCE_MICROPHONE
+        await self.room.local_participant.publish_track(self.audio_track, options)
 
     async def teardown(self):
         self._closed.set()
@@ -136,16 +150,19 @@ class SmartfloLiveKitBridge:
                     "media": {"payload": base64.b64encode(mulaw).decode(), "chunk": self.chunk_counter}
                 })
                 self.chunk_counter += 1
-            except: break
+            except:
+                break
 
     async def send_smartflo_audio_to_livekit(self, audio_payload: str):
         try:
             mulaw_data = base64.b64decode(audio_payload)
             pcm_data = audioop.ulaw2lin(mulaw_data, 2)
-            frame = rtc.AudioFrame(data=pcm_data, sample_rate=8000, num_channels=1, samples_per_channel=len(pcm_data)//2)
+            frame = rtc.AudioFrame(data=pcm_data, sample_rate=8000, num_channels=1,
+                                   samples_per_channel=len(pcm_data) // 2)
             await self.audio_source.capture_frame(frame)
         except Exception as e:
             print(f"[BRIDGE] Audio capture error: {e}")
+
 
 # ── WebSocket Endpoint ────────────────────────────────────────────────────────
 
@@ -159,8 +176,10 @@ async def smartflo_websocket_endpoint(websocket: WebSocket):
 
             try:
                 message = await asyncio.wait_for(websocket.receive_text(), timeout=0.5)
-            except asyncio.TimeoutError: continue
-            except: break
+            except asyncio.TimeoutError:
+                continue
+            except:
+                break
 
             data = json.loads(message)
             event = data.get("event")
@@ -191,6 +210,8 @@ async def smartflo_websocket_endpoint(websocket: WebSocket):
             _set_call_status_terminal(bridge.room_name, "completed")
             await bridge.teardown()
 
+
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run(app, host="0.0.0.0", port=8319)
