@@ -15,5 +15,4 @@ livekit-plugins-sarvam
 audioop-lts; python_version >= "3.13"
 pandas
 openpyxl
-psycopg2-binary
 sqlalchemy>=2.0.0

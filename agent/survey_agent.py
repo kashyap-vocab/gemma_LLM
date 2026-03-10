@@ -5,9 +5,11 @@ from agent.db_storage import feedback_sessions, _default_feedback_session, persi
 
 
 class SurveyAssistant(Agent):
-    def __init__(self, call_id: str = None, customer_name: str = None) -> None:
+    def __init__(self, call_id: str = None, customer_name: str = None, agreement_no: str = None) -> None:
         self._call_id = call_id
         self._customer_name = customer_name
+        self._agreement_no = agreement_no
+
 
         # Build instructions with customer name hint if available
         name_hint = ""
@@ -162,25 +164,30 @@ When the conversation is ending (after confirmation, sensitive situation, or ref
             tools=end_call_tool.tools,
         )
 
-    async def on_enter(self):
-        name_part = f"{self._customer_name} जी" if self._customer_name else "आप"
-        greeting = f"नमस्ते, मैं एल एंड टी फाइनेंस की तरफ़ से बात कर रही हूँ। यह कॉल आपके पेमेंट अनुभव को जानने के लिए है। क्या मेरी बात {name_part} से हो रही है?"
-        self.session.say(greeting, allow_interruptions=True)
+    # Greeting is handled by web_rtc_server.py (with transliteration).
+    # on_enter() intentionally left empty to avoid duplicate greeting.
 
     def _store(self, key: str, value):
-        """Helper to store a value in the feedback session."""
-        if not self._call_id:
-            return
-        feedback_sessions.setdefault(self._call_id, _default_feedback_session(self._call_id))[key] = value
+            """Helper to store a value in the feedback session."""
+            if not self._call_id:
+                return
+            session = feedback_sessions.setdefault(self._call_id, _default_feedback_session())
+            session[key] = value
+            # Ensure the agreement_no is always attached to the session for the DB writer
+            if self._agreement_no:
+                session["agreement_no"] = self._agreement_no
 
     def _store_payment(self, key: str, value: str):
-        """Helper to store a payment detail."""
-        if not self._call_id:
-            return
-        session = feedback_sessions.setdefault(self._call_id, _default_feedback_session(self._call_id))
-        if "payment" not in session:
-            session["payment"] = {}
-        session["payment"][key] = value
+            """Helper to store a payment detail."""
+            if not self._call_id:
+                return
+            session = feedback_sessions.setdefault(self._call_id, _default_feedback_session())
+            if "payment" not in session:
+                session["payment"] = {}
+            session["payment"][key] = value
+            # Ensure agreement_no link is present
+            if self._agreement_no:
+                session["agreement_no"] = self._agreement_no
 
     @function_tool()
     async def store_identity_confirmed(self, status: str) -> str:
@@ -190,6 +197,10 @@ When the conversation is ending (after confirmation, sensitive situation, or ref
             status: YES or NO or NOT_AVAILABLE or SENSITIVE_SITUATION
         """
         self._store("identity_confirmed", status)
+        # When the customer confirms their identity, mark the call as connected.
+        # This triggers transcript + feedback persistence at the end of the call.
+        if status.upper() == "YES":
+            self._store("disposition", "connected")
         return f"Stored identity_confirmed={status}. Proceed to next question."
 
     @function_tool()
@@ -299,12 +310,12 @@ When the conversation is ending (after confirmation, sensitive situation, or ref
         """
         if not self._call_id:
             return "No call_id available."
-        
+
         print(f"🔍 [DEBUG] complete_survey called with confirmed={confirmed}")
         print(f"🔍 [DEBUG] Current feedback_sessions state: {feedback_sessions.get(self._call_id, {})}")
-        
-        feedback_sessions.setdefault(self._call_id, _default_feedback_session(self._call_id))["confirmed"] = confirmed
+
+        feedback_sessions.setdefault(self._call_id, _default_feedback_session())["confirmed"] = confirmed
         feedback_sessions[self._call_id]["category"] = "COMPLETE_SURVEY"
-        asyncio.create_task(persist_feedback_to_db(self._call_id))
+        asyncio.create_task(persist_feedback_to_db(self._call_id, self._agreement_no))
 
         return f"Survey completed, confirmed={confirmed}. Now call end_call() to end the call."

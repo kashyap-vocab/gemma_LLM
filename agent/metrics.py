@@ -98,10 +98,10 @@ class MetricsTracker:
         if handler:
             handler(turn, ev.metrics)
 
-    def print_session_summary(self) -> None:
+    def print_session_summary(self, call_id: Optional[str] = None, agreement_no: Optional[str] = None) -> None:
         usage = self._usage_collector.get_summary()
         print("\n\n" + "=" * 70)
-        print("📊 SESSION METRICS SUMMARY")
+        print(f"📊 SESSION METRICS SUMMARY | Agreement: {agreement_no or 'Unknown'}")
         print("=" * 70)
         for turn in self._turns.values():
             if turn.has_data():

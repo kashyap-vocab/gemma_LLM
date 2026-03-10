@@ -1,25 +1,47 @@
 """
-Database storage helpers for conversation and feedback data.
+Database storage helpers for the agent.
 
-NOTE: This module uses raw psycopg2 for database operations.
-It can be migrated to use SQLAlchemy ORM models (db/models.py) in the future.
+Session-based call state management:
+  - feedback_sessions holds all in-memory state per call (transcript buffer,
+    survey data, timing, disposition).
+  - On call disconnect the session is flushed according to disposition:
+      connected     → write transcript to Conversation + write CustomerFeedback
+      not_connected → skip both (only call_metadata is finalized)
+  - call_metadata is ALWAYS updated regardless of outcome.
 """
-import os
 import asyncio
+import logging
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Any, Optional, Tuple
 
-# Global session store for feedback data
+from db.database import SessionLocal
+from db.models import CallMetadata, Conversation, CustomerFeedback
+
+logger = logging.getLogger(__name__)
+
+# ── In-memory session store ───────────────────────────────────────────────────
+# Keyed by call_id (LiveKit room name). Holds all transient data for the call.
 feedback_sessions: dict[str, dict] = {}
 
 
-def _default_feedback_session(call_id: str) -> dict:
-    """Create default feedback session dict."""
+def _default_feedback_session() -> dict:
+    """Blank session for a new call."""
     return {
-        "stage": "greeting",
-        "started": datetime.now(timezone.utc).isoformat(),
-        "started_at": datetime.now(timezone.utc),
+        # Relational identifiers
+        "agreement_no": None,
+        "customer_phone": None,
         "customer_name": None,
+        # Disposition: "connected" (identity confirmed YES) | "not_connected"
+        "disposition": "not_connected",
+        # True once participant_connected fires — customer physically answered the phone.
+        # Used to distinguish "answered but hung up early" from "never answered".
+        "call_answered": False,
+        # Buffered transcript — list of dicts: {role, text, speaker_id}
+        # Flushed to the Conversation table at the end of the call (if call_answered).
+        "transcript_buffer": [],
+        # Survey / feedback fields
+        "stage": "greeting",
+        "started_at": datetime.now(timezone.utc),
         "identity_confirmed": None,
         "loan_taken": None,
         "last_month_payment": None,
@@ -29,272 +51,235 @@ def _default_feedback_session(call_id: str) -> dict:
     }
 
 
-def _to_numeric(v) -> Optional[float]:
-    """Convert value to numeric, return None if invalid."""
-    if v is None or v == '':
-        print(f"🔍 [DEBUG] _to_numeric: value is None or empty")
+def _to_numeric(v: Any) -> Optional[float]:
+    if v is None or v == "":
         return None
     try:
-        result = float(v)
-        print(f"🔍 [DEBUG] _to_numeric: successfully converted '{v}' to {result}")
-        return result
-    except (TypeError, ValueError) as e:
-        print(f"🔍 [DEBUG] _to_numeric: failed to convert '{v}' (type: {type(v)}): {e}")
+        return float(v)
+    except (TypeError, ValueError):
         return None
 
 
-def _load_call_metadata(call_id: str, customer_phone: Optional[str] = None) -> tuple[Optional[str], Optional[str]]:
-    """
-    Load customer phone and name from database.
+# ── Call metadata lookup ──────────────────────────────────────────────────────
 
-    Priority 1: Try active_call_context by phone number (most reliable)
-    Priority 2: Try call_metadata by call_id (fallback)
-
-    Args:
-        call_id: Call identifier from room name
-        customer_phone: Customer phone number from room metadata (if available)
-
-    Returns:
-        Tuple of (customer_phone, customer_name)
-    """
-    database_url = os.getenv("DATABASE_URL")
-    if not database_url:
-        return None, None
-
-    try:
-        import psycopg2
-        conn = psycopg2.connect(database_url)
-        try:
-            with conn.cursor() as cur:
-                # Priority 1: Lookup by phone number in active_call_context
-                if customer_phone:
-                    print(f"🔍 Looking up customer by phone: {customer_phone}")
-                    cur.execute(
-                        """
-                        SELECT phone_number, customer_name, call_status
-                        FROM active_call_context
-                        WHERE phone_number = %s
-                        ORDER BY updated_at DESC
-                        LIMIT 1
-                        """,
-                        (customer_phone,)
-                    )
-                    row = cur.fetchone()
-                    if row:
-                        phone, name, status = row
-                        print(f"✅ Found in active_call_context: {name} ({phone}), status={status}")
-
-                        # Update status to 'active' and store call_id
-                        cur.execute(
-                            """
-                            UPDATE active_call_context
-                            SET call_status = 'active', call_id = %s, updated_at = NOW()
-                            WHERE phone_number = %s
-                            """,
-                            (call_id, customer_phone)
-                        )
-                        conn.commit()
-                        print(f"📝 Updated call status to 'active' for {customer_phone}")
-
-                        return (phone, name)
-
-                # Priority 2: Fallback to call_metadata by call_id
-                print(f"🔍 Looking up customer by call_id: {call_id}")
-                cur.execute(
-                    "SELECT customer_phone, customer_name FROM call_metadata WHERE call_id = %s ORDER BY created_at DESC LIMIT 1",
-                    (call_id,)
-                )
-                row = cur.fetchone()
-                if row:
-                    print(f"✅ Found in call_metadata: {row[1]} ({row[0]})")
-                    return (row[0], row[1])
-
-                print(f"⚠️ No customer metadata found for call_id={call_id}, phone={customer_phone}")
-                return (None, None)
-        finally:
-            conn.close()
-    except Exception as e:
-        print(f"Warning: Could not load call metadata: {e}")
-        import traceback
-        traceback.print_exc()
-        return None, None
-
-
-def _store_conversation_turn_sync(
+def _load_call_metadata(
     call_id: str,
-    customer_phone: Optional[str],
-    customer_transcript: Optional[str] = None,
-    agent_transcript: Optional[str] = None,
-    speaker_id: Optional[str] = None,
-    language: Optional[str] = None,
-) -> None:
-    """Synchronous DB write for conversation."""
-    if not customer_transcript and not agent_transcript:
-        return
-    database_url = os.getenv("DATABASE_URL")
-    if not database_url:
-        return
-    try:
-        import psycopg2
-        conn = psycopg2.connect(database_url)
+    customer_phone: Optional[str] = None,
+) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+    """
+    ORM-based lookup. Returns (phone_number, customer_name, agreement_no).
+    Does NOT update call_status — status transitions are owned by the API layer.
+    """
+    with SessionLocal() as db:
         try:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    INSERT INTO conversation (call_id, customer_phone, customer_transcript, agent_transcript, speaker_id, language)
-                    VALUES (%s, %s, %s, %s, %s, %s)
-                    """,
-                    (
-                        call_id,
-                        customer_phone or None,
-                        customer_transcript or None,
-                        agent_transcript or None,
-                        speaker_id or None,
-                        language or None,
-                    ),
+            # Step 1: primary-key lookup (fastest)
+            call = db.query(CallMetadata).get(call_id)
+
+            # Step 2: fallback by phone number
+            if not call and customer_phone:
+                call = (
+                    db.query(CallMetadata)
+                    .filter(CallMetadata.phone_number == customer_phone)
+                    .order_by(CallMetadata.updated_at.desc())
+                    .first()
                 )
-            conn.commit()
-        finally:
-            conn.close()
-    except Exception as e:
-        print(f"Error storing conversation turn: {e}")
+
+            if call:
+                cust_name = call.customer.customer_name if call.customer else None
+                return call.phone_number, cust_name, call.agreement_no
+
+            return None, None, None
+        except Exception as e:
+            logger.error(f"Error in _load_call_metadata: {e}")
+            return None, None, None
 
 
-async def store_conversation_turn(
+# ── Transcript buffer ─────────────────────────────────────────────────────────
+
+def buffer_transcript_turn(
     call_id: str,
-    customer_phone: Optional[str],
-    customer_transcript: Optional[str] = None,
-    agent_transcript: Optional[str] = None,
+    role: str,
+    text: str,
     speaker_id: Optional[str] = None,
-    language: Optional[str] = None,
 ) -> None:
-    """Async wrapper for conversation storage."""
-    loop = asyncio.get_event_loop()
-    await loop.run_in_executor(
-        None,
-        _store_conversation_turn_sync,
-        call_id,
-        customer_phone,
-        customer_transcript,
-        agent_transcript,
-        speaker_id,
-        language,
-    )
+    """Append a conversation turn to the in-memory buffer for this call."""
+    if not text:
+        return
+    session = feedback_sessions.setdefault(call_id, _default_feedback_session())
+    session["transcript_buffer"].append({
+        "role": role,
+        "text": text,
+        "speaker_id": speaker_id,
+    })
 
 
-def _persist_feedback_to_db_sync(call_id: str, customer_phone: Optional[str] = None) -> None:
-    """Synchronous DB write for feedback."""
+def _flush_transcript_buffer_sync(
+    call_id: str,
+    agreement_no: Optional[str],
+    customer_phone: Optional[str],
+) -> None:
+    """Write buffered transcript turns to the Conversation table (bulk insert)."""
+    session = feedback_sessions.get(call_id, {})
+    transcript_buffer = session.get("transcript_buffer", [])
+    if not transcript_buffer:
+        return
+
+    with SessionLocal() as db:
+        try:
+            for turn in transcript_buffer:
+                role = turn.get("role", "")
+                text = turn.get("text", "")
+                speaker_id = turn.get("speaker_id")
+                db.add(Conversation(
+                    call_id=call_id,
+                    agreement_no=agreement_no,
+                    customer_phone=customer_phone,
+                    customer_transcript=text if role == "user" else None,
+                    agent_transcript=text if role == "assistant" else None,
+                    speaker_id=speaker_id if role == "user" else None,
+                    language="hi",
+                ))
+            db.commit()
+            logger.info(f"Flushed {len(transcript_buffer)} transcript turns for {call_id}")
+        except Exception as e:
+            db.rollback()
+            logger.error(f"Error flushing transcript buffer for {call_id}: {e}")
+
+
+# ── Feedback persistence ──────────────────────────────────────────────────────
+
+def _persist_feedback_to_db_sync(call_id: str, agreement_no: Optional[str] = None) -> None:
+    """
+    Disposition-based persistence:
+      connected     → flush transcript buffer → write CustomerFeedback
+      not_connected → skip both
+      always        → finalize call_metadata (status + duration)
+    """
     data = feedback_sessions.get(call_id)
     if not data:
         return
-    database_url = os.getenv("DATABASE_URL")
-    if not database_url:
-        return
-    phone = customer_phone or call_id
-    payment = data.get("payment") or {}
-    
-    # Debug logging for payment amount extraction
-    raw_amount = payment.get("amount") or data.get("payment_amount")
-    print(f"🔍 [DEBUG] Persisting feedback for call_id={call_id}")
-    print(f"🔍 [DEBUG] Full feedback_sessions data: {data}")
-    print(f"🔍 [DEBUG] Payment dict: {payment}")
-    print(f"🔍 [DEBUG] Raw amount value: {raw_amount} (type: {type(raw_amount)})")
-    numeric_amount = _to_numeric(raw_amount)
-    print(f"🔍 [DEBUG] Converted numeric amount: {numeric_amount}")
-    
-    row = (
-        phone,
-        call_id,
-        data.get("identity_confirmed"),
-        data.get("loan_taken"),
-        data.get("last_month_payment"),
-        payment.get("payee") or data.get("payee"),
-        payment.get("payee_name") or data.get("payee_name"),
-        payment.get("payee_contact") or data.get("payee_contact"),
-        payment.get("date") or payment.get("payment_date") or data.get("payment_date"),
-        payment.get("mode") or payment.get("payment_mode") or data.get("payment_mode"),
-        payment.get("reason") or payment.get("payment_reason") or data.get("payment_reason"),
-        numeric_amount,
-        payment.get("field_executive_name") or data.get("field_executive_name"),
-        payment.get("field_executive_contact") or data.get("field_executive_contact"),
-        data.get("customer_name"),
-        data.get("confirmed"),
-        data.get("category"),
-        data.get("started_at"),
-    )
-    try:
-        import psycopg2
-        conn = psycopg2.connect(database_url)
+
+    disposition = data.get("disposition", "not_connected")
+    call_answered = data.get("call_answered", False)
+    ano = agreement_no or data.get("agreement_no")
+    customer_phone = data.get("customer_phone")
+    started_at = data.get("started_at")
+
+    # ── Determine final call_status ──────────────────────────────────────────
+    # connected + survey confirmed  → completed
+    # connected + survey not done   → incomplete
+    # call_answered but no identity → incomplete  (customer picked up, hung up early)
+    # never answered                → missedcall
+    if disposition == "connected":
+        final_status = "completed" if data.get("category") == "COMPLETE_SURVEY" else "incomplete"
+    elif call_answered:
+        final_status = "incomplete"   # Picked up, heard greeting, but no survey data
+    else:
+        final_status = "missedcall"   # Phone never answered
+
+    # ── Always: finalize call_metadata ───────────────────────────────────────
+    with SessionLocal() as db:
         try:
-            with conn.cursor() as cur:
-                cur.execute("SELECT id FROM customer_feedback_data WHERE call_id = %s ORDER BY created_at DESC LIMIT 1", (call_id,))
-                existing = cur.fetchone()
-                if existing:
-                    cur.execute(
-                        """
-                        UPDATE customer_feedback_data SET
-                            customer_phone = %s, identity_confirmed = %s, loan_taken = %s, last_month_payment = %s,
-                            payee = %s, payee_name = %s, payee_contact = %s, payment_date = %s, payment_mode = %s,
-                            payment_reason = %s, payment_amount = %s, field_executive_name = %s, field_executive_contact = %s,
-                            customer_name = %s, confirmed = %s, category = %s, started_at = %s
-                        WHERE id = %s
-                        """,
-                        (row[0],) + row[2:] + (existing[0],),
-                    )
-                else:
-                    cur.execute(
-                        """
-                        INSERT INTO customer_feedback_data (
-                            customer_phone, call_id, identity_confirmed, loan_taken, last_month_payment,
-                            payee, payee_name, payee_contact, payment_date, payment_mode, payment_reason,
-                            payment_amount, field_executive_name, field_executive_contact,
-                            customer_name, confirmed, category, started_at
-                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                        """,
-                        row,
-                    )
-            conn.commit()
-        finally:
-            conn.close()
-    except Exception as e:
-        print(f"Error persisting feedback: {e}")
+            call = db.query(CallMetadata).get(call_id)
+            if call:
+                call.call_status = final_status
+                call.updated_at = datetime.now(timezone.utc)
+                if started_at:
+                    elapsed = (datetime.now(timezone.utc) - started_at).seconds
+                    call.call_duration = elapsed
+                db.commit()
+        except Exception as e:
+            logger.error(f"Error finalizing call_metadata for {call_id}: {e}")
 
-
-async def persist_feedback_to_db(call_id: str, customer_phone: Optional[str] = None) -> None:
-    """Async wrapper for feedback persistence."""
-    loop = asyncio.get_event_loop()
-    await loop.run_in_executor(None, _persist_feedback_to_db_sync, call_id, customer_phone)
-
-
-def _update_call_status_sync(customer_phone: str, status: str) -> None:
-    """Update call status in active_call_context table."""
-    database_url = os.getenv("DATABASE_URL")
-    if not database_url or not customer_phone:
+    # ── Conditional: transcript + feedback only when call was answered ────────
+    if not call_answered:
+        logger.info(f"Call {call_id} never answered — skipping transcript/feedback writes ({final_status})")
         return
-    try:
-        import psycopg2
-        conn = psycopg2.connect(database_url)
+
+    # Flush transcript buffer to Conversation table (greeting + any turns collected)
+    _flush_transcript_buffer_sync(call_id, ano, customer_phone)
+
+    # If identity was never confirmed, skip the detailed feedback write —
+    # only the transcript (greeting) is worth saving for audit purposes.
+    if disposition != "connected":
+        logger.info(f"Call {call_id} answered but identity not confirmed — transcript saved, skipping feedback write ({final_status})")
+        return
+
+    # Write CustomerFeedback
+    with SessionLocal() as db:
         try:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    UPDATE active_call_context
-                    SET call_status = %s, updated_at = NOW()
-                    WHERE phone_number = %s
-                    """,
-                    (status, customer_phone)
-                )
-            conn.commit()
-            print(f"📝 Updated call status to '{status}' for {customer_phone}")
-        finally:
-            conn.close()
-    except Exception as e:
-        print(f"Warning: Could not update call status: {e}")
+            feedback = (
+                db.query(CustomerFeedback)
+                .filter(CustomerFeedback.call_id == call_id)
+                .first()
+            )
+            if not feedback:
+                feedback = CustomerFeedback(call_id=call_id)
+                db.add(feedback)
+
+            payment = data.get("payment") or {}
+
+            feedback.agreement_no = ano
+            feedback.customer_phone = customer_phone
+            feedback.customer_name = data.get("customer_name")
+            feedback.disposition = "connected"
+            feedback.sub_disposition = None  # Reserved for future use
+
+            # Identity & loan
+            identity_val = str(data.get("identity_confirmed") or "").upper()
+            feedback.identity_confirmed = identity_val == "YES"
+            feedback.loan_taken = data.get("loan_taken") is True
+            feedback.last_month_payment = data.get("last_month_payment")
+
+            # Payment details
+            feedback.payee = payment.get("payee") or data.get("payee")
+            feedback.payee_name = payment.get("payee_name") or data.get("payee_name")
+            feedback.payee_contact = payment.get("payee_contact") or data.get("payee_contact")
+            feedback.payment_date = payment.get("date") or data.get("payment_date")
+            feedback.payment_mode = payment.get("mode") or data.get("payment_mode")
+            feedback.payment_reason = payment.get("reason") or data.get("payment_reason")
+
+            # Field executive
+            feedback.field_executive_name = (
+                payment.get("field_executive_name") or data.get("field_executive_name")
+            )
+            feedback.field_executive_contact = (
+                payment.get("field_executive_contact") or data.get("field_executive_contact")
+            )
+
+            # Survey outcome
+            feedback.stage = data.get("stage")
+            feedback.confirmed = data.get("confirmed")
+            feedback.category = data.get("category")
+            feedback.started_at = started_at
+
+            db.commit()
+            logger.info(f"Feedback persisted for {call_id} (agreement={ano})")
+        except Exception as e:
+            db.rollback()
+            logger.error(f"Error persisting feedback for {call_id}: {e}")
 
 
-async def update_call_status(customer_phone: str, status: str) -> None:
-    """Async wrapper for updating call status."""
-    if not customer_phone:
-        return
+async def persist_feedback_to_db(call_id: str, agreement_no: Optional[str] = None) -> None:
     loop = asyncio.get_event_loop()
-    await loop.run_in_executor(None, _update_call_status_sync, customer_phone, status)
+    await loop.run_in_executor(None, _persist_feedback_to_db_sync, call_id, agreement_no)
+
+
+# ── Call status updates ───────────────────────────────────────────────────────
+
+def _update_call_status_sync(call_id: str, status: str) -> None:
+    """Direct status update — used for intermediate states only."""
+    with SessionLocal() as db:
+        try:
+            call = db.query(CallMetadata).get(call_id)
+            if call:
+                call.call_status = status
+                call.updated_at = datetime.now(timezone.utc)
+                db.commit()
+        except Exception as e:
+            logger.error(f"Status update failed for {call_id}: {e}")
+
+
+async def update_call_status(call_id: str, status: str) -> None:
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(None, _update_call_status_sync, call_id, status)

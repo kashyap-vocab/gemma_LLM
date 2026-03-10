@@ -10,6 +10,8 @@ project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 sys.path.insert(0, str(project_root / "smart-flo"))
 
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -25,8 +27,23 @@ from api.auto_dialer import router as auto_dialer_router
 # Import Smartflo bridge WebSocket handler
 from smartflow_bridge import smartflo_websocket_endpoint
 
+from sqlalchemy import text
+
+from db.database import engine
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    # Ensure the customer_id sequence exists before any upload INSERT runs.
+    # Safe to call on every startup — CREATE SEQUENCE IF NOT EXISTS is idempotent.
+    with engine.connect() as conn:
+        conn.execute(text("CREATE SEQUENCE IF NOT EXISTS customer_id_seq START 1"))
+        conn.commit()
+    yield
+
+
 # Create main app
-app = FastAPI(title="LiveKit Customer Management API")
+app = FastAPI(title="LiveKit Customer Management API", lifespan=lifespan)
 
 # CORS middleware - allow all origins for global access
 app.add_middleware(
@@ -81,13 +98,12 @@ else:
 
 if __name__ == "__main__":
     uvicorn.run(
-        app,
+        "api.main:app",
         host="0.0.0.0",
         port=8000,
-        # Performance optimizations for 5 concurrent calls
-        workers=1,              # Single worker (shared state in auto_dialer.py)
-        log_level="info",       # Reduce logging overhead
-        access_log=False,       # Disable access logs for performance
-        limit_concurrency=50,   # Max concurrent connections
-        backlog=100,            # Connection queue size
+        workers=5,
+        log_level="info",
+        access_log=False,
+        limit_concurrency=50,
+        backlog=100,
     )

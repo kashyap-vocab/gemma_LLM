@@ -45,6 +45,7 @@ if [ ! -d node_modules ]; then
     echo "Installing frontend dependencies..."
     npm install --silent
 fi
+rm -rf build
 npm run build 2>&1 | tail -3
 echo -e "${GREEN}Frontend built successfully.${NC}"
 
@@ -73,7 +74,7 @@ echo -e "Agent PID: ${AGENT_PID}"
 sleep 3
 
 # ---- Step 4: Start API Server (serves frontend + API + WebSocket bridge) ----
-echo -e "\n${GREEN}[4/4] Starting API Server on port 8000...${NC}"
+echo -e "\n${GREEN}[4/4] Starting API Server on port 8000 (5 workers)...${NC}"
 cd "$PROJECT_ROOT"
 python api/main.py &
 API_PID=$!
