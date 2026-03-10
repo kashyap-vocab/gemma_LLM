@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import InitialView from './components/InitialView';
 import DashboardLayout from './components/DashboardLayout';
 
-const API_BASE = 'http://localhost:8000/api';
+const API_BASE = '/api';
 
 export default function App() {
   const [view, setView] = useState('initial'); 
