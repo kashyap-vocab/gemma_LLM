@@ -51,12 +51,7 @@ from agent.survey_agent import SurveyAssistant
 load_dotenv()
 
 # Import database storage helpers
-from agent.db_storage import (
-    _load_call_metadata as load_call_metadata,
-    feedback_sessions,
-    _default_feedback_session,
-    buffer_transcript_turn,
-)
+
 
 # Module-level dict for end-call signal events (per call_id)
 call_end_signals: dict[str, asyncio.Event] = {}
@@ -156,6 +151,12 @@ async def my_agent(ctx: agents.JobContext):
 
     # DB lookup
     if not agreement_no:
+        from agent.db_storage import (
+            _load_call_metadata as load_call_metadata,
+            feedback_sessions,
+            _default_feedback_session,
+            buffer_transcript_turn,
+        )
         db_phone, db_name, db_agreement = load_call_metadata(call_id, customer_phone=customer_phone)
         customer_phone = customer_phone or db_phone
         customer_name = db_name or customer_name
