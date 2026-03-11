@@ -319,15 +319,21 @@ When the conversation is ending (after confirmation, sensitive situation, or ref
         Args:
             confirmed: True if customer said the summary is correct, False if they want to correct
         """
-        from agent.db_storage import feedback_sessions, _default_feedback_session, persist_feedback_to_db
+        from agent.db_storage import feedback_sessions, _default_feedback_session
         if not self._call_id:
             return "No call_id available."
 
         print(f"🔍 [DEBUG] complete_survey called with confirmed={confirmed}")
-        print(f"🔍 [DEBUG] Current feedback_sessions state: {feedback_sessions.get(self._call_id, {})}")
 
-        feedback_sessions.setdefault(self._call_id, _default_feedback_session())["confirmed"] = confirmed
-        feedback_sessions[self._call_id]["category"] = "COMPLETE_SURVEY"
-        asyncio.create_task(persist_feedback_to_db(self._call_id, self._agreement_no))
+        session = feedback_sessions.setdefault(self._call_id, _default_feedback_session())
+        session["confirmed"] = confirmed
+        session["category"] = "COMPLETE_SURVEY"
+        # Survey completion definitively means the customer was reached and engaged.
+        # Set disposition="connected" so the finally block in web_rtc_server persists
+        # the CustomerFeedback row even if store_identity_confirmed was never called.
+        # (The async task approach was buggy: the finally block pops feedback_sessions
+        #  before the scheduled task ever runs.)
+        session["disposition"] = "connected"
 
+        print(f"🔍 [DEBUG] Feedback session after complete_survey: {session}")
         return f"Survey completed, confirmed={confirmed}. Now call end_call() to end the call."
