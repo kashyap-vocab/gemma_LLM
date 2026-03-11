@@ -1,14 +1,15 @@
 import asyncio
+
 from livekit.agents import Agent, function_tool
 from livekit.agents.beta.tools import EndCallTool
 
 
 class SurveyAssistant(Agent):
-    def __init__(self, call_id: str = None, customer_name: str = None, agreement_no: str = None) -> None:
+    def __init__(self, call_id: str = None, customer_name: str = None, agreement_no: str = None,
+                 on_end_call=None) -> None:
         self._call_id = call_id
         self._customer_name = customer_name
         self._agreement_no = agreement_no
-
 
         # Build instructions with customer name hint if available
         name_hint = ""
@@ -21,6 +22,11 @@ class SurveyAssistant(Agent):
             if call_id:
                 feedback_sessions.setdefault(call_id, _default_feedback_session())["end_call_invoked"] = True
                 print(f"[AGENT] 📴 end_call() invoked by LLM for {call_id}")
+            # Signal web_rtc_server to publish the hangup data message to the bridge.
+            # This must happen BEFORE EndCallTool closes the session so the message
+            # is published while the room connection is still live.
+            if on_end_call:
+                on_end_call()
 
         end_call_tool = EndCallTool(
             delete_room=False,
@@ -168,29 +174,29 @@ When the conversation is ending (after confirmation, sensitive situation, or ref
     # on_enter() intentionally left empty to avoid duplicate greeting.
 
     def _store(self, key: str, value):
-            """Helper to store a value in the feedback session."""
-            from agent.db_storage import feedback_sessions, _default_feedback_session
+        """Helper to store a value in the feedback session."""
+        from agent.db_storage import feedback_sessions, _default_feedback_session
 
-            if not self._call_id:
-                return
-            session = feedback_sessions.setdefault(self._call_id, _default_feedback_session())
-            session[key] = value
-            # Ensure the agreement_no is always attached to the session for the DB writer
-            if self._agreement_no:
-                session["agreement_no"] = self._agreement_no
+        if not self._call_id:
+            return
+        session = feedback_sessions.setdefault(self._call_id, _default_feedback_session())
+        session[key] = value
+        # Ensure the agreement_no is always attached to the session for the DB writer
+        if self._agreement_no:
+            session["agreement_no"] = self._agreement_no
 
     def _store_payment(self, key: str, value: str):
-            """Helper to store a payment detail."""
-            from agent.db_storage import feedback_sessions, _default_feedback_session
-            if not self._call_id:
-                return
-            session = feedback_sessions.setdefault(self._call_id, _default_feedback_session())
-            if "payment" not in session:
-                session["payment"] = {}
-            session["payment"][key] = value
-            # Ensure agreement_no link is present
-            if self._agreement_no:
-                session["agreement_no"] = self._agreement_no
+        """Helper to store a payment detail."""
+        from agent.db_storage import feedback_sessions, _default_feedback_session
+        if not self._call_id:
+            return
+        session = feedback_sessions.setdefault(self._call_id, _default_feedback_session())
+        if "payment" not in session:
+            session["payment"] = {}
+        session["payment"][key] = value
+        # Ensure agreement_no link is present
+        if self._agreement_no:
+            session["agreement_no"] = self._agreement_no
 
     @function_tool()
     async def store_identity_confirmed(self, status: str) -> str:

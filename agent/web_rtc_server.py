@@ -40,6 +40,7 @@ from livekit.agents import (
     AgentSession,
     MetricsCollectedEvent,
     ConversationItemAddedEvent,
+    UserInputTranscribedEvent,
     room_io,
 )
 from livekit.plugins import deepgram, google, noise_cancellation, silero, sarvam
@@ -56,6 +57,7 @@ load_dotenv()
 # Module-level dict for end-call signal events (per call_id)
 call_end_signals: dict[str, asyncio.Event] = {}
 
+
 # ============================================================================
 # Prewarming
 # ============================================================================
@@ -69,6 +71,7 @@ def prewarm(proc: agents.JobProcess):
         temperature=0.1,
         thinking_config=types.ThinkingConfig(include_thoughts=False),
     )
+
 
 # ============================================================================
 # Main Agent Session
@@ -169,6 +172,17 @@ async def my_agent(ctx: agents.JobContext):
 
     print(f"\n🎯 SESSION START | Room: {call_id} | Agreement: {agreement_no}")
 
+    # Set up end-call signal (moved here so _signal_hangup can reference it)
+    call_end_signals[call_id] = asyncio.Event()
+
+    # Event set when the SmartFlo bridge joins the room (customer answered)
+    bridge_connected = asyncio.Event()
+
+    def _signal_hangup() -> None:
+        """Called by SurveyAssistant when the LLM invokes end_call()."""
+        if call_id in call_end_signals:
+            call_end_signals[call_id].set()
+
     session_tts = sarvam.TTS(
         target_language_code="hi-IN",
         speaker="simran",
@@ -187,9 +201,10 @@ async def my_agent(ctx: agents.JobContext):
         preemptive_generation=True,
     )
 
-    @session.on("user_speech_committed")
-    def on_user_speech_committed(msg: agents.stt.SpeechEvent):
-        logger.info(f"[{call_id}] 👤 User Speech: {msg.alternatives[0].text}")
+    @session.on("user_input_transcribed")
+    def on_user_input_transcribed(ev: UserInputTranscribedEvent):
+        if ev.is_final:
+            logger.info(f"[{call_id}] 👤 User Speech: {ev.transcript}")
 
     @session.on("error")
     def on_session_error(err):
@@ -227,15 +242,18 @@ async def my_agent(ctx: agents.JobContext):
     # If the customer answers while the greeting TTS is playing, this event fires
     # concurrently. Registering it early ensures we never miss it.
     @ctx.room.on("participant_connected")
-    def on_participant_connected(participant):
-        logger.info(f"[{call_id}] 📞 Participant connected: {participant.identity} (kind={participant.kind})")
-        # Run DB update in a background thread so we don't block the event loop
-        asyncio.get_event_loop().run_in_executor(
-            None,
-            lambda: _update_call_status_in_bg(call_id),
-        )
+    def on_participant_connected(participant_details):
+        logger.info(
+            f"[{call_id}] 📞 Participant connected: {participant_details.identity} (kind={participant_details.kind})")
+        bridge_connected.set()  # Unblock greeting — customer is now on the line
+        import threading
+        threading.Thread(target=_update_call_status_in_bg, args=(call_id,), daemon=True).start()
         if call_id in feedback_sessions:
             feedback_sessions[call_id]["call_answered"] = True
+
+    # Handle race: bridge may have joined before the handler was registered
+    if ctx.room.remote_participants:
+        bridge_connected.set()
 
     try:
         # ── Step 4: Start session ──────────────────────────────────────────────
@@ -245,7 +263,8 @@ async def my_agent(ctx: agents.JobContext):
 
         await session.start(
             room=ctx.room,
-            agent=SurveyAssistant(call_id=call_id, customer_name=customer_name, agreement_no=agreement_no),
+            agent=SurveyAssistant(call_id=call_id, customer_name=customer_name, agreement_no=agreement_no,
+                                  on_end_call=_signal_hangup),
             room_options=room_io.RoomOptions(
                 audio_input=room_io.AudioInputOptions(
                     noise_cancellation=lambda params: (
@@ -256,13 +275,28 @@ async def my_agent(ctx: agents.JobContext):
                 ),
             ),
         )
-        logger.info(f"[{call_id}] ✅ AgentSession started, ready to greet")
+        logger.info(f"[{call_id}] ✅ AgentSession started, waiting for SmartFlo bridge...")
 
-        # Get transliterated name (should be done by now)
+        # ── Wait for the SmartFlo bridge (customer answered the phone) ─────────
+        # The bridge joins the LiveKit room only AFTER the customer picks up.
+        # Saying the greeting before the bridge is present means the customer
+        # hears nothing. We block here until the audio path is live.
+        try:
+            await asyncio.wait_for(bridge_connected.wait(), timeout=120.0)
+            logger.info(f"[{call_id}] ✅ Bridge connected — warming up audio path")
+            # Short pause for the audio pipeline (track subscription → μ-law forwarding)
+            # to fully establish before we start TTS. Without this the customer
+            # misses the first ~0.5 s of the greeting.
+            await asyncio.sleep(0.8)
+        except asyncio.TimeoutError:
+            logger.warning(f"[{call_id}] ⚠️ SmartFlo bridge never connected within 120s — aborting")
+            return
+
+        # Get transliterated name (should be done by now — customer took time to answer)
         hindi_name = customer_name
         if transliterate_task:
             try:
-                hindi_name = await asyncio.wait_for(transliterate_task, timeout=3.0)
+                hindi_name = await asyncio.wait_for(transliterate_task, timeout=1.0)
             except Exception:
                 hindi_name = customer_name
 
@@ -284,7 +318,9 @@ async def my_agent(ctx: agents.JobContext):
             logger.warning(f"[{call_id}] Greeting say() error: {e}")
 
         # ── Step 5: Set up end-call signal and wait for room disconnect ────────
-        call_end_signals[call_id] = asyncio.Event()
+        # call_end_signals[call_id] was already created before session.start().
+        # _signal_hangup() (passed to SurveyAssistant) will set it when end_call()
+        # is invoked by the LLM, unblocking the task below to publish hangup.
 
         async def _wait_and_signal_hangup():
             await call_end_signals[call_id].wait()
@@ -302,6 +338,7 @@ async def my_agent(ctx: agents.JobContext):
         # Unblock so we proceed to cleanup.
         def on_session_close(ev):
             disconnect_event.set()
+
         session.once("close", on_session_close)
 
         # disconnect_event was registered at the TOP of this function, before
@@ -351,13 +388,13 @@ async def _transliterate_name(name: str) -> str:
         logger.warning(f"Transliteration failed for '{name}': {e}")
         return name
 
+
 server = agents.WorkerOptions(
     agent_name="LTFS_SurveyAgent-Soma",
     entrypoint_fnc=my_agent,
     prewarm_fnc=prewarm,
     num_idle_processes=5,
     # ROOM type ensures the agent is optimized for the Jobs API flow
-    worker_type=agents.WorkerType.ROOM, 
 )
 
 if __name__ == "__main__":
