@@ -1,10 +1,8 @@
 import asyncio
 import base64
 import logging
-import re
 import json
 import os
-import subprocess
 from dataclasses import dataclass
 from typing import Any
 
@@ -26,9 +24,6 @@ logger = logging.getLogger(__name__)
 
 SARVAM_TTS_WS_URL = "wss://api.sarvam.ai/text-to-speech/ws"
 
-# Devanagari unicode block (covers Hindi script used in this flow).
-_DEVANAGARI_RE = re.compile(r"[\u0900-\u097F]")
-
 
 @dataclass(frozen=True)
 class SarvamTTSConfig:
@@ -46,47 +41,11 @@ class SarvamTTSConfig:
     send_completion_event: bool
 
 
-def _mp3_bytes_to_wav_s16le(mp3_bytes: bytes, *, sample_rate: int) -> bytes:
-    """
-    Convert MP3 bytes to WAV (PCM s16le, mono) using ffmpeg.
-
-    LiveKit's WAV decoding expects the bytes to form a valid WAV stream
-    (with a RIFF header). Sarvam returns MP3 bytes, so we convert before
-    pushing them to LiveKit.
-    """
-    cmd = [
-        "ffmpeg",
-        "-hide_banner",
-        "-loglevel",
-        "error",
-        "-f",
-        "mp3",
-        "-i",
-        "pipe:0",
-        "-ac",
-        "1",
-        "-ar",
-        str(sample_rate),
-        "-f",
-        "wav",
-        "-acodec",
-        "pcm_s16le",
-        "pipe:1",
-    ]
-    proc = subprocess.run(cmd, input=mp3_bytes, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    if proc.returncode != 0:
-        raise RuntimeError(f"ffmpeg mp3->pcm conversion failed: {proc.stderr.decode('utf-8', 'ignore')}")
-    return proc.stdout
-
-
 class SarvamFixedSynthesizeStream(tts.SynthesizeStream):
     """
-    Streaming Sarvam TTS adapter that:
-    - receives MP3 frames from Sarvam
-    - converts the full MP3 byte stream to a single WAV payload
-    - pushes them to LiveKit as `audio/wav`
-
-    This avoids LiveKit's WAV decoder errors ("missing RIFF/WAVE").
+    Streaming Sarvam TTS adapter that requests WAV output directly
+    from Sarvam (via output_audio_codec="wav") and pushes it to
+    LiveKit as `audio/wav`.
     """
 
     def __init__(self, *, tts_instance: "SarvamFixedTTS", conn_options: APIConnectOptions) -> None:
@@ -137,6 +96,8 @@ class SarvamFixedSynthesizeStream(tts.SynthesizeStream):
                     "loudness": self._tts._config.loudness,
                     "enable_preprocessing": self._tts._config.enable_preprocessing,
                     "model": self._tts._config.model,
+                    "output_audio_codec": "wav",
+                    "speech_sample_rate": self._tts._config.speech_sample_rate,
                 },
             }
 
@@ -156,17 +117,20 @@ class SarvamFixedSynthesizeStream(tts.SynthesizeStream):
                         started = True
                     text_buf.append(chunk)
 
-            text = "".join(text_buf)
-            # Sarvam rejects websocket "text" payloads that contain no characters
-            # from the allowed languages (hi-IN => Devanagari). Prevent that here.
-            if text.strip() and _DEVANAGARI_RE.search(text):
+            text = "".join(text_buf).strip()
+            # With enable_preprocessing=True, Sarvam handles both Hindi
+            # (Devanagari) and English (Latin) text. Only skip truly empty text.
+            if text:
                 await ws.send_str(json.dumps({"type": "text", "data": {"text": text}}))
-
-            await ws.send_str(json.dumps({"type": "flush"}))
+                await ws.send_str(json.dumps({"type": "flush"}))
+            else:
+                logger.warning("Skipping Sarvam TTS: empty text buffer")
+                await ws.close()
+                return
 
         async def _recv_task() -> None:
             assert ws is not None
-            mp3_acc = bytearray()
+            wav_acc = bytearray()
             try:
                 while True:
                     msg = await ws.receive(timeout=self._conn_options.timeout)
@@ -183,8 +147,7 @@ class SarvamFixedSynthesizeStream(tts.SynthesizeStream):
                             audio_data = resp.get("data", {}).get("audio", "")
                             if not audio_data:
                                 continue
-                            mp3_bytes = base64.b64decode(audio_data)
-                            mp3_acc.extend(mp3_bytes)
+                            wav_acc.extend(base64.b64decode(audio_data))
 
                         elif msg_type == "error":
                             err = resp.get("data", {}).get("message", "Sarvam TTS error")
@@ -194,15 +157,10 @@ class SarvamFixedSynthesizeStream(tts.SynthesizeStream):
                             event_data = resp.get("data", {}) or {}
                             event_type = event_data.get("event_type")
                             if event_type == "final":
-                                if not mp3_acc:
+                                if not wav_acc:
                                     raise APIError("no audio frames produced by Sarvam")
-                                # Convert in a thread to avoid blocking the event loop.
-                                wav_bytes = await asyncio.to_thread(
-                                    _mp3_bytes_to_wav_s16le,
-                                    bytes(mp3_acc),
-                                    sample_rate=self._tts._config.speech_sample_rate,
-                                )
-                                output_emitter.push(wav_bytes)
+                                # Sarvam returns WAV directly — no conversion needed.
+                                output_emitter.push(bytes(wav_acc))
                                 output_emitter.end_input()
                                 return
 
@@ -214,6 +172,13 @@ class SarvamFixedSynthesizeStream(tts.SynthesizeStream):
                 raise
             except Exception as e:
                 raise APIConnectionError(f"TTS WebSocket session failed: {e}") from e
+            finally:
+                # Ensure end_input is always called so the stream doesn't hang
+                # (e.g. when send_task closes WS early due to no Devanagari text).
+                try:
+                    output_emitter.end_input()
+                except Exception:
+                    pass
 
         try:
             try:
@@ -250,7 +215,7 @@ class SarvamFixedTTS(tts.TTS):
         model: str | None = None,
         pace: float = 1.0,
         speech_sample_rate: int = 22050,
-        enable_preprocessing: bool = False,
+        enable_preprocessing: bool = True,
         pitch: float = 0.0,
         loudness: float = 1.0,
         send_completion_event: bool = True,
