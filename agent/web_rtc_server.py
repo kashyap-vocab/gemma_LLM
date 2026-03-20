@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import re
 import sys
 from pathlib import Path
 
@@ -56,6 +57,14 @@ load_dotenv()
 
 # Module-level dict for end-call signal events (per call_id)
 call_end_signals: dict[str, asyncio.Event] = {}
+
+
+def _sanitize_assistant_text(text: str) -> str:
+    """Remove accidental tool/markdown payloads from assistant text."""
+    cleaned = re.sub(r"```[\s\S]*?```", "", text).strip()
+    cleaned = re.sub(r"\{[^{}]*tool[^{}]*\}", "", cleaned, flags=re.IGNORECASE).strip()
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned
 
 
 # ============================================================================
@@ -216,12 +225,13 @@ async def my_agent(ctx: agents.JobContext):
     def on_conversation_item_added(event: ConversationItemAddedEvent):
         item = event.item
         text = (item.text_content or "").strip()
-        if not text:
-            return
-
         role = getattr(item, "role", None)
         role_str = (getattr(role, "value", None) or getattr(role, "name", None) or str(role)).lower()
         speaker_id = getattr(item, "speaker_id", None)
+        if role_str == "assistant":
+            text = _sanitize_assistant_text(text)
+        if not text:
+            return
 
         transcript_buffer.append((role_str, text, speaker_id))
         logger.info(f"[{call_id}] [{role_str.upper()}] {text[:120]}")
