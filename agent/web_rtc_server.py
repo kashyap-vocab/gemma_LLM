@@ -65,7 +65,7 @@ call_end_signals: dict[str, asyncio.Event] = {}
 def prewarm(proc: agents.JobProcess):
     print("🔥 PREWARMING MODELS...")
     proc.userdata["vad"] = silero.VAD.load()
-    proc.userdata["stt"] = deepgram.STT(model="nova-2", language="hi")
+    proc.userdata["stt"] = deepgram.STT(model="nova-3", language="hi")
     proc.userdata["llm"] = google.LLM(
         model="gemini-2.0-flash",
         temperature=0.1,
@@ -324,7 +324,7 @@ async def my_agent(ctx: agents.JobContext):
 
         async def _wait_and_signal_hangup():
             await call_end_signals[call_id].wait()
-            await asyncio.sleep(1.5)
+            await asyncio.sleep(4.0)
             try:
                 import json as _j
                 hangup_msg = _j.dumps({"action": "hangup"}).encode("utf-8")
