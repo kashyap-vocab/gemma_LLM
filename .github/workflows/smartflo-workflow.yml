@@ -5,7 +5,7 @@ on:
     branches:
       - main
       - dev
-      -stable-callflow
+      - stable-callflow
     paths:
       - 'smart-flo/**'
       - 'smartflo.Dockerfile'

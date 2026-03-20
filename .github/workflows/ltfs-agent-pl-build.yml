@@ -5,7 +5,7 @@ on:
     branches:
       - main
       - dev
-      -stable-callflow
+      - stable-callflow
   workflow_dispatch:
 
 jobs:
