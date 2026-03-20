@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import logging
 import json
 import os
 import subprocess
@@ -10,6 +11,7 @@ import aiohttp
 
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
+    APIError,
     APIConnectionError,
     APIConnectOptions,
     APIStatusError,
@@ -17,6 +19,8 @@ from livekit.agents import (
     tts,
     utils,
 )
+
+logger = logging.getLogger(__name__)
 
 
 SARVAM_TTS_WS_URL = "wss://api.sarvam.ai/text-to-speech/ws"
@@ -38,15 +42,14 @@ class SarvamTTSConfig:
     send_completion_event: bool
 
 
-def _mp3_bytes_to_pcm_s16le(mp3_bytes: bytes, *, sample_rate: int) -> bytes:
+def _mp3_bytes_to_wav_s16le(mp3_bytes: bytes, *, sample_rate: int) -> bytes:
     """
-    Convert MP3 bytes to raw PCM (s16le, mono) using ffmpeg.
+    Convert MP3 bytes to WAV (PCM s16le, mono) using ffmpeg.
 
-    We output raw PCM so LiveKit can ingest it as `audio/pcm` without running
-    its WAV/MP3 decoders.
+    LiveKit's WAV decoding expects the bytes to form a valid WAV stream
+    (with a RIFF header). Sarvam returns MP3 bytes, so we convert before
+    pushing them to LiveKit.
     """
-    # Note: Sarvam returns MP3-encoded bytes (MP3 frame header starts with 0xFF F3),
-    # while LiveKit was trying to decode it as WAV.
     cmd = [
         "ffmpeg",
         "-hide_banner",
@@ -61,7 +64,7 @@ def _mp3_bytes_to_pcm_s16le(mp3_bytes: bytes, *, sample_rate: int) -> bytes:
         "-ar",
         str(sample_rate),
         "-f",
-        "s16le",
+        "wav",
         "-acodec",
         "pcm_s16le",
         "pipe:1",
@@ -76,8 +79,8 @@ class SarvamFixedSynthesizeStream(tts.SynthesizeStream):
     """
     Streaming Sarvam TTS adapter that:
     - receives MP3 frames from Sarvam
-    - converts them to raw PCM (s16le)
-    - pushes them to LiveKit as `audio/pcm`
+    - converts the full MP3 byte stream to a single WAV payload
+    - pushes them to LiveKit as `audio/wav`
 
     This avoids LiveKit's WAV decoder errors ("missing RIFF/WAVE").
     """
@@ -85,6 +88,9 @@ class SarvamFixedSynthesizeStream(tts.SynthesizeStream):
     def __init__(self, *, tts_instance: "SarvamFixedTTS", conn_options: APIConnectOptions) -> None:
         super().__init__(tts=tts_instance, conn_options=conn_options)
         self._tts: SarvamFixedTTS = tts_instance
+        # Defensive compatibility: some older variants referenced `_input_text`.
+        # Ensuring the attribute exists avoids AttributeError crashes.
+        self._input_text = ""
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         request_id = utils.shortuuid()
@@ -92,7 +98,7 @@ class SarvamFixedSynthesizeStream(tts.SynthesizeStream):
             request_id=request_id,
             sample_rate=self._tts.sample_rate,
             num_channels=self._tts.num_channels,
-            mime_type="audio/pcm",
+            mime_type="audio/wav",
             stream=True,
             frame_size_ms=50,
         )
@@ -148,6 +154,7 @@ class SarvamFixedSynthesizeStream(tts.SynthesizeStream):
 
         async def _recv_task() -> None:
             assert ws is not None
+            mp3_acc = bytearray()
             try:
                 while True:
                     msg = await ws.receive(timeout=self._conn_options.timeout)
@@ -165,13 +172,7 @@ class SarvamFixedSynthesizeStream(tts.SynthesizeStream):
                             if not audio_data:
                                 continue
                             mp3_bytes = base64.b64decode(audio_data)
-                            # Convert in a thread to avoid blocking the event loop.
-                            pcm_bytes = await asyncio.to_thread(
-                                _mp3_bytes_to_pcm_s16le,
-                                mp3_bytes,
-                                sample_rate=self._tts._config.speech_sample_rate,
-                            )
-                            output_emitter.push(pcm_bytes)
+                            mp3_acc.extend(mp3_bytes)
 
                         elif msg_type == "error":
                             err = resp.get("data", {}).get("message", "Sarvam TTS error")
@@ -181,6 +182,15 @@ class SarvamFixedSynthesizeStream(tts.SynthesizeStream):
                             event_data = resp.get("data", {}) or {}
                             event_type = event_data.get("event_type")
                             if event_type == "final":
+                                if not mp3_acc:
+                                    raise APIError("no audio frames produced by Sarvam")
+                                # Convert in a thread to avoid blocking the event loop.
+                                wav_bytes = await asyncio.to_thread(
+                                    _mp3_bytes_to_wav_s16le,
+                                    bytes(mp3_acc),
+                                    sample_rate=self._tts._config.speech_sample_rate,
+                                )
+                                output_emitter.push(wav_bytes)
                                 output_emitter.end_input()
                                 return
 
@@ -252,6 +262,14 @@ class SarvamFixedTTS(tts.TTS):
             send_completion_event=send_completion_event,
         )
         self._config = cfg
+        logger.info(
+            "SarvamFixedTTS init: model=%s speaker=%s lang=%s pace=%s sample_rate=%s",
+            cfg.model,
+            cfg.speaker,
+            cfg.target_language_code,
+            cfg.pace,
+            cfg.speech_sample_rate,
+        )
 
         super().__init__(
             capabilities=tts.TTSCapabilities(streaming=True),
