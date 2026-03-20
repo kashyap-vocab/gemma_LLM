@@ -133,9 +133,17 @@ class SarvamFixedSynthesizeStream(tts.SynthesizeStream):
             await ws.send_str(json.dumps(config_msg))
 
             # Sarvam expects text chunks followed by a flush.
-            await ws.send_str(
-                json.dumps({"type": "text", "data": {"text": self._input_text}})
-            )
+            # LiveKit streams `text` chunks via `self._input_ch` for each segment.
+            started = False
+            async for chunk in self._input_ch:
+                if isinstance(chunk, self._FlushSentinel):
+                    break
+                if isinstance(chunk, str) and chunk:
+                    if not started:
+                        self._mark_started()
+                        started = True
+                    await ws.send_str(json.dumps({"type": "text", "data": {"text": chunk}}))
+
             await ws.send_str(json.dumps({"type": "flush"}))
 
         async def _recv_task() -> None:
