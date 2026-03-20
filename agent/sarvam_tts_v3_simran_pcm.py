@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import logging
+import re
 import json
 import os
 import subprocess
@@ -24,6 +25,9 @@ logger = logging.getLogger(__name__)
 
 
 SARVAM_TTS_WS_URL = "wss://api.sarvam.ai/text-to-speech/ws"
+
+# Devanagari unicode block (covers Hindi script used in this flow).
+_DEVANAGARI_RE = re.compile(r"[\u0900-\u097F]")
 
 
 @dataclass(frozen=True)
@@ -138,8 +142,10 @@ class SarvamFixedSynthesizeStream(tts.SynthesizeStream):
 
             await ws.send_str(json.dumps(config_msg))
 
-            # Sarvam expects text chunks followed by a flush.
-            # LiveKit streams `text` chunks via `self._input_ch` for each segment.
+            # LiveKit streams text tokens; Sarvam validates *each* "text" message.
+            # Sending per-token can fail when a token is whitespace/punctuation only.
+            # So we buffer everything until FlushSentinel, then send as one request.
+            text_buf: list[str] = []
             started = False
             async for chunk in self._input_ch:
                 if isinstance(chunk, self._FlushSentinel):
@@ -148,7 +154,13 @@ class SarvamFixedSynthesizeStream(tts.SynthesizeStream):
                     if not started:
                         self._mark_started()
                         started = True
-                    await ws.send_str(json.dumps({"type": "text", "data": {"text": chunk}}))
+                    text_buf.append(chunk)
+
+            text = "".join(text_buf)
+            # Sarvam rejects websocket "text" payloads that contain no characters
+            # from the allowed languages (hi-IN => Devanagari). Prevent that here.
+            if text.strip() and _DEVANAGARI_RE.search(text):
+                await ws.send_str(json.dumps({"type": "text", "data": {"text": text}}))
 
             await ws.send_str(json.dumps({"type": "flush"}))
 
