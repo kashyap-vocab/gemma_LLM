@@ -70,6 +70,11 @@ ENV PYTHONOPTIMIZE=2 \
 
 WORKDIR /app
 
+# Needed for MP3->PCM conversion in `agent/sarvam_tts_v3_simran_pcm.py`
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
 # Copy pre-built wheels from builder
 COPY --from=builder /wheels /wheels
 COPY --from=builder /app/requirements.txt /app/requirements.txt

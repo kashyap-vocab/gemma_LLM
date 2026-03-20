@@ -44,10 +44,11 @@ from livekit.agents import (
     UserInputTranscribedEvent,
     room_io,
 )
-from livekit.plugins import deepgram, google, noise_cancellation, silero, sarvam
+from livekit.plugins import deepgram, google, noise_cancellation, silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
 from agent.metrics import MetricsTracker
+from agent.sarvam_tts_v3_simran_pcm import SarvamFixedTTS
 from agent.survey_agent import SurveyAssistant
 
 load_dotenv()
@@ -192,7 +193,9 @@ async def my_agent(ctx: agents.JobContext):
         if call_id in call_end_signals:
             call_end_signals[call_id].set()
 
-    session_tts = sarvam.TTS(
+    # Use Sarvam bulbul v3 simran, but emit raw PCM to avoid
+    # "missing RIFF/WAVE" decoding failures.
+    session_tts = SarvamFixedTTS(
         target_language_code="hi-IN",
         speaker="simran",
         model="bulbul:v3",

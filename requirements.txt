@@ -6,7 +6,6 @@ httpx
 livekit
 livekit-agents[silero,turn-detector]~=1.4
 livekit-plugins-deepgram
-livekit-plugins-elevenlabs
 livekit-plugins-google
 livekit-plugins-silero
 livekit-plugins-noise-cancellation~=0.2
