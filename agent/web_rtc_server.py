@@ -87,6 +87,16 @@ def prewarm(proc: agents.JobProcess):
 # Main Agent Session
 # ============================================================================
 
+async def _warmup_sarvam_tts(tts_instance: SarvamFixedTTS) -> None:
+    """Prime Sarvam WebSocket/TLS so the first real utterance has lower latency."""
+    try:
+        stream = tts_instance.synthesize("नमस्ते")
+        async for _ in stream:
+            pass
+    except Exception as e:
+        logger.warning("Sarvam TTS warmup failed (non-fatal): %s", e)
+
+
 async def my_agent(ctx: agents.JobContext):
     print(f"✅ Job accepted for room: {ctx.room.name}")
     import json as _json
@@ -201,6 +211,8 @@ async def my_agent(ctx: agents.JobContext):
         model="bulbul:v3",
         pace=1.0,
     )
+    # Overlap Sarvam cold start with session.start() + bridge wait (hidden latency).
+    tts_warmup_task = asyncio.create_task(_warmup_sarvam_tts(session_tts))
 
     session = AgentSession(
         turn_detection=MultilingualModel(),  # type: ignore[arg-type]
@@ -256,13 +268,20 @@ async def my_agent(ctx: agents.JobContext):
     # concurrently. Registering it early ensures we never miss it.
     @ctx.room.on("participant_connected")
     def on_participant_connected(participant_details):
+        participant_identity = str(participant_details.identity or "")
         logger.info(
-            f"[{call_id}] 📞 Participant connected: {participant_details.identity} (kind={participant_details.kind})")
+            f"[{call_id}] 📞 Participant connected: {participant_identity} (kind={participant_details.kind})")
         bridge_connected.set()  # Unblock greeting — customer is now on the line
         import threading
         threading.Thread(target=_update_call_status_in_bg, args=(call_id,), daemon=True).start()
         if call_id in feedback_sessions:
             feedback_sessions[call_id]["call_answered"] = True
+            # Smartflow participant identity format:
+            #   smartflo-caller-<callSid>
+            # Keep this ID for downstream persistence (customer_feedback.conversation_id).
+            prefix = "smartflo-caller-"
+            if participant_identity.startswith(prefix):
+                feedback_sessions[call_id]["smartflow_call_id"] = participant_identity[len(prefix):]
 
     # Handle race: bridge may have joined before the handler was registered
     if ctx.room.remote_participants:
@@ -300,9 +319,10 @@ async def my_agent(ctx: agents.JobContext):
             # Short pause for the audio pipeline (track subscription → μ-law forwarding)
             # to fully establish before we start TTS. Without this the customer
             # misses the first ~0.5 s of the greeting.
-            await asyncio.sleep(0.8)
+            await asyncio.sleep(0.35)
         except asyncio.TimeoutError:
             logger.warning(f"[{call_id}] ⚠️ SmartFlo bridge never connected within 120s — aborting")
+            tts_warmup_task.cancel()
             return
 
         # Get transliterated name (should be done by now — customer took time to answer)
@@ -312,6 +332,12 @@ async def my_agent(ctx: agents.JobContext):
                 hindi_name = await asyncio.wait_for(transliterate_task, timeout=1.0)
             except Exception:
                 hindi_name = customer_name
+
+        # Ensure Sarvam warmup finished (or cap wait) before the real greeting.
+        try:
+            await asyncio.wait_for(tts_warmup_task, timeout=6.0)
+        except (asyncio.TimeoutError, asyncio.CancelledError):
+            pass
 
         name_part = f"{hindi_name} जी" if hindi_name else "आप"
         greeting_text = (
@@ -337,7 +363,7 @@ async def my_agent(ctx: agents.JobContext):
 
         async def _wait_and_signal_hangup():
             await call_end_signals[call_id].wait()
-            await asyncio.sleep(4.0)
+            await asyncio.sleep(8.0)
             try:
                 import json as _j
                 hangup_msg = _j.dumps({"action": "hangup"}).encode("utf-8")

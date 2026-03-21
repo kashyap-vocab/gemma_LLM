@@ -131,6 +131,10 @@ class SarvamFixedSynthesizeStream(tts.SynthesizeStream):
         async def _recv_task() -> None:
             assert ws is not None
             wav_acc = bytearray()
+            # Stream each audio chunk as soon as it arrives. Buffering everything
+            # until "final" makes TTFB equal to full synthesis time (multi-second
+            # delay before the greeting starts on long utterances).
+            pushed_any = False
             try:
                 while True:
                     msg = await ws.receive(timeout=self._conn_options.timeout)
@@ -147,7 +151,12 @@ class SarvamFixedSynthesizeStream(tts.SynthesizeStream):
                             audio_data = resp.get("data", {}).get("audio", "")
                             if not audio_data:
                                 continue
-                            wav_acc.extend(base64.b64decode(audio_data))
+                            chunk = base64.b64decode(audio_data)
+                            if not chunk:
+                                continue
+                            wav_acc.extend(chunk)
+                            output_emitter.push(chunk)
+                            pushed_any = True
 
                         elif msg_type == "error":
                             err = resp.get("data", {}).get("message", "Sarvam TTS error")
@@ -159,8 +168,10 @@ class SarvamFixedSynthesizeStream(tts.SynthesizeStream):
                             if event_type == "final":
                                 if not wav_acc:
                                     raise APIError("no audio frames produced by Sarvam")
-                                # Sarvam returns WAV directly — no conversion needed.
-                                output_emitter.push(bytes(wav_acc))
+                                # If the API only delivered audio in one blob before
+                                # "final" without intermediate "audio" messages, push once.
+                                if not pushed_any:
+                                    output_emitter.push(bytes(wav_acc))
                                 output_emitter.end_input()
                                 return
 
