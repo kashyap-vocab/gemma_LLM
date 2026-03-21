@@ -11,6 +11,7 @@ sys.path.insert(0, str(project_root))
 sys.path.insert(0, str(project_root / "smart-flo"))
 
 from contextlib import asynccontextmanager
+import asyncio
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -26,6 +27,7 @@ from api.auto_dialer import router as auto_dialer_router
 
 # Import Smartflo bridge WebSocket handler
 from smartflow_bridge import smartflo_websocket_endpoint
+from api.feedback_backfill_scheduler import periodic_feedback_backfill
 
 from db.database import engine, Base
 from db.models import Customer, CallMetadata, Conversation, CustomerFeedback  # noqa: F401
@@ -35,7 +37,13 @@ from db.models import Customer, CallMetadata, Conversation, CustomerFeedback  # 
 async def lifespan(_app: FastAPI):
     # Create all tables and sequences on startup (no-op if they already exist)
     Base.metadata.create_all(bind=engine)
-    yield
+    stop_event = asyncio.Event()
+    backfill_task = asyncio.create_task(periodic_feedback_backfill(stop_event))
+    try:
+        yield
+    finally:
+        stop_event.set()
+        await asyncio.gather(backfill_task, return_exceptions=True)
 
 
 # Create main app
