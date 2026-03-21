@@ -199,20 +199,27 @@ def _persist_feedback_to_db_sync(call_id: str, agreement_no: Optional[str] = Non
     # Flush transcript buffer to Conversation table (greeting + any turns collected)
     _flush_transcript_buffer_sync(call_id, ano, customer_phone)
 
-    # If identity was never confirmed, skip the detailed feedback write —
-    # only the transcript (greeting) is worth saving for audit purposes.
-    if disposition != "connected":
-        logger.info(f"Call {call_id} answered but identity not confirmed — transcript saved, skipping feedback write ({final_status})")
-        return
-
-    # Write CustomerFeedback
+    # Write CustomerFeedback for all answered calls (connected + not_connected).
     with SessionLocal() as db:
         try:
-            feedback = (
-                db.query(CustomerFeedback)
-                .filter(CustomerFeedback.call_id == call_id)
-                .first()
-            )
+            # Upsert key:
+            # - Prefer agreement_no when available (more stable for repeated retries)
+            # - Fallback to call_id otherwise.
+            feedback = None
+            if ano:
+                feedback = (
+                    db.query(CustomerFeedback)
+                    .filter(CustomerFeedback.agreement_no == ano)
+                    .order_by(CustomerFeedback.created_at.desc())
+                    .first()
+                )
+            if feedback is None:
+                feedback = (
+                    db.query(CustomerFeedback)
+                    .filter(CustomerFeedback.call_id == call_id)
+                    .order_by(CustomerFeedback.created_at.desc())
+                    .first()
+                )
             if not feedback:
                 feedback = CustomerFeedback(call_id=call_id)
                 db.add(feedback)
@@ -222,8 +229,10 @@ def _persist_feedback_to_db_sync(call_id: str, agreement_no: Optional[str] = Non
             feedback.agreement_no = ano
             feedback.customer_phone = customer_phone
             feedback.customer_name = data.get("customer_name")
-            feedback.disposition = "connected"
-            feedback.sub_disposition = None  # Reserved for future use
+            feedback.disposition = "connected" if disposition == "connected" else "not_connected"
+            # Keep sub_disposition if already set by backfill; otherwise allow session value.
+            if data.get("sub_disposition"):
+                feedback.sub_disposition = data.get("sub_disposition")
 
             # Identity & loan
             identity_val = str(data.get("identity_confirmed") or "").upper()
@@ -252,6 +261,10 @@ def _persist_feedback_to_db_sync(call_id: str, agreement_no: Optional[str] = Non
             feedback.confirmed = data.get("confirmed")
             feedback.category = data.get("category")
             feedback.started_at = started_at
+            # Persist Smartflow callSid (if captured from participant identity).
+            # We keep call_id as the LiveKit room key for relational integrity.
+            feedback.conversation_id = data.get("smartflow_call_id")
+            feedback.call_timestamp = datetime.now(timezone.utc)
 
             db.commit()
             logger.info(f"Feedback persisted for {call_id} (agreement={ano})")
