@@ -4,10 +4,10 @@ python-multipart
 python-dotenv
 httpx
 livekit==1.1.2
-livekit-agents[silero,turn-detector]~=1.5.0
-livekit-plugins-deepgram==1.5.0
-livekit-plugins-google==1.5.0
-livekit-plugins-silero==1.5.0
+livekit-agents[silero,turn-detector]==1.4.5
+livekit-plugins-deepgram==1.4.5
+livekit-plugins-google==1.4.5
+livekit-plugins-silero==1.4.5
 livekit-plugins-sarvam==1.4.5
 livekit-plugins-noise-cancellation~=0.2
 audioop-lts; python_version >= "3.13"
