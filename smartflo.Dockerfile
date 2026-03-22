@@ -59,7 +59,8 @@ RUN find /app -name "*.so" -exec strip {} \;
 # Create __init__.py files for packages
 RUN touch /app/api/__init__.py \
     /app/db/__init__.py \
-    /app/agent/__init__.py
+    /app/agent/__init__.py \
+    /app/scripts/__init__.py
 
 # Delete compiled .py files (keep source for non-compiled files)
 RUN rm -f /app/agent/db_storage.py \
@@ -74,7 +75,8 @@ RUN rm -f /app/agent/db_storage.py \
     /app/db/models/conversation.py \
     /app/db/models/customer_feedback.py \
     /app/db/utils.py \
-    /app/smart-flo/smartflow_bridge.py
+    /app/smart-flo/smartflow_bridge.py \
+    /app/scripts/backfill_feedback_with_llm.py
 
 # Clean up build artifacts
 RUN find /app -name "*.c" -type f -delete
@@ -86,7 +88,6 @@ ENV PYTHONOPTIMIZE=2 \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PYTHONPATH=/app \
-    # Performance tuning for 5 concurrent calls
     MALLOC_ARENA_MAX=2 \
     PYTHONHASHSEED=0 \
     PYTHONASYNCIODEBUG=0
@@ -120,6 +121,7 @@ COPY --from=py-builder /app/agent/ ./agent/
 COPY --from=py-builder /app/api/ ./api/
 COPY --from=py-builder /app/db/ ./db/
 COPY --from=py-builder /app/smart-flo/ ./smart-flo/
+COPY --from=py-builder /app/scripts/ ./scripts/
 
 # Copy non-compiled source files (needed at runtime)
 COPY api/main.py api/auto_dialer.py ./api/
