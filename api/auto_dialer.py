@@ -139,7 +139,7 @@ async def _call_one_customer(
         customer_name = customer["customer_name"]
         phone_number = customer["contact_number"]
         phone_normalized = _normalize_phone(phone_number)
-        room_name = f"call-{phone_normalized}-{datetime.now()}"
+        room_name = f"call-{phone_normalized}"
         _state["current_index"] = idx
         _state["current_customer"] = customer_name
         _state["active_calls"] += 1

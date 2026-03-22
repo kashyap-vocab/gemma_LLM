@@ -225,7 +225,7 @@ async def update_call_context(request: CallContextRequest, db: Session = Depends
     Status is set to 'pending' — it becomes 'active' only after SmartFlo triggers the call.
     """
     phone_normalized = normalize_phone(request.phone_number)
-    room_name = f"call-{phone_normalized}-{datetime.now()}"
+    room_name = f"call-{phone_normalized}"
     agreement_no = request.agreement_no
     if not agreement_no:
         cust = db.query(Customer).filter(Customer.contact_number == phone_normalized).first()
