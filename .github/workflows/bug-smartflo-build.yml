@@ -98,4 +98,4 @@ jobs:
           script: |
             cd /tmp
             docker pull $BRIDGE_IMAGE:latest
-            AGENT_IMAGE=$AGENT_IMAGE BRIDGE_IMAGE=$BRIDGE_IMAGE docker-compose up -d --force-recreate api
+            AGENT_IMAGE=$AGENT_IMAGE BRIDGE_IMAGE=$BRIDGE_IMAGE docker compose up -d --force-recreate api

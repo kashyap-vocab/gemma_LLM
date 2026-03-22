@@ -1,7 +1,3 @@
-"""
-Smartflo-LiveKit Bridge
-100% ORM-based approach for relational database models.
-"""
 import asyncio
 import base64
 import json
