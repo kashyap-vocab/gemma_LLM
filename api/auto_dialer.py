@@ -23,9 +23,9 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from api.smartflo_client import get_smartflo_client
 from db.database import get_db, SessionLocal
 from db.models import Customer, CallMetadata
-from api.smartflo_client import get_smartflo_client
 
 logger = logging.getLogger(__name__)
 
@@ -49,8 +49,10 @@ _state = {
 
 _event_queue: asyncio.Queue = asyncio.Queue()
 
+
 def _push_event(event: dict) -> None:
     _event_queue.put_nowait(event)
+
 
 def _normalize_phone(number: str) -> str:
     if not number: return ""
@@ -59,13 +61,14 @@ def _normalize_phone(number: str) -> str:
         clean = clean[2:]
     return clean
 
+
 # ---------------------------------------------------------------------------
 # Poll DB for call completion using SQLAlchemy ORM
 # ---------------------------------------------------------------------------
 async def _wait_for_call_completion(
-    room_name: str,
-    unanswered_timeout: int = 60,
-    max_call_duration: int = 600,
+        room_name: str,
+        unanswered_timeout: int = 60,
+        max_call_duration: int = 600,
 ) -> str:
     """
     Poll call_metadata until a terminal status is detected.
@@ -114,14 +117,15 @@ async def _wait_for_call_completion(
 
     return "missedcall"
 
+
 # ---------------------------------------------------------------------------
 # Per-customer coroutine
 # ---------------------------------------------------------------------------
 async def _call_one_customer(
-    idx: int,
-    customer: dict,
-    total: int,
-    semaphore: asyncio.Semaphore,
+        idx: int,
+        customer: dict,
+        total: int,
+        semaphore: asyncio.Semaphore,
 ) -> None:
     async with semaphore:
         if _state["stop_requested"]:
@@ -135,8 +139,7 @@ async def _call_one_customer(
         customer_name = customer["customer_name"]
         phone_number = customer["contact_number"]
         phone_normalized = _normalize_phone(phone_number)
-        room_name = f"call-{phone_normalized}"
-
+        room_name = f"call-{phone_normalized}-{datetime.now()}"
         _state["current_index"] = idx
         _state["current_customer"] = customer_name
         _state["active_calls"] += 1
@@ -177,9 +180,9 @@ async def _call_one_customer(
             })
 
             async with livekit_api.LiveKitAPI(
-                url=lk_url,
-                api_key=os.getenv("LIVEKIT_API_KEY", ""),
-                api_secret=os.getenv("LIVEKIT_API_SECRET", ""),
+                    url=lk_url,
+                    api_key=os.getenv("LIVEKIT_API_KEY", ""),
+                    api_secret=os.getenv("LIVEKIT_API_SECRET", ""),
             ) as lk:
                 try:
                     await lk.room.delete_room(livekit_api.DeleteRoomRequest(room=room_name))
@@ -190,11 +193,15 @@ async def _call_one_customer(
                     name=room_name,
                     empty_timeout=300,
                     metadata=lk_meta,
-                    agents=[livekit_api.RoomAgentDispatch(
-                        agent_name="LTFS_SurveyAgent-Soma",
-                        metadata=lk_meta,
-                    )],
                 ))
+
+                await lk.agent_dispatch.create_dispatch(
+                    livekit_api.CreateAgentDispatchRequest(
+                        agent_name="LTFS_SurveyAgent-Soma",
+                        room=room_name,
+                        metadata=lk_meta,
+                    )
+                )
 
             # Wait for agent to fully connect to the room before triggering SmartFlo.
             # The agent process needs to: receive the job dispatch → connect to the
@@ -279,8 +286,10 @@ async def _run_auto_dialer(customers: list) -> None:
     tasks = [_call_one_customer(i, c, len(customers), semaphore) for i, c in enumerate(customers)]
     await asyncio.gather(*tasks)
 
-    _push_event({"type": "finished", "total": len(customers), "completed": _state["completed"], "failed": _state["failed"]})
+    _push_event(
+        {"type": "finished", "total": len(customers), "completed": _state["completed"], "failed": _state["failed"]})
     _state["active"] = False
+
 
 async def _sse_generator() -> AsyncGenerator[str, None]:
     yield f"data: {json.dumps({'type': 'status', **_state_snapshot()})}\n\n"
@@ -292,8 +301,10 @@ async def _sse_generator() -> AsyncGenerator[str, None]:
         except asyncio.TimeoutError:
             yield "data: {\"type\": \"heartbeat\"}\n\n"
 
+
 def _state_snapshot() -> dict:
     return {k: v for k, v in _state.items()} | {"concurrency": CONCURRENCY}
+
 
 # ---------------------------------------------------------------------------
 # API Endpoints
@@ -303,10 +314,11 @@ class AutoDialerStartRequest(BaseModel):
     agreement_nos: Optional[List[str]] = None
     concurrency: Optional[int] = None
 
+
 @router.post("/auto-dialer/start")
 async def start_auto_dialer(
-    request: AutoDialerStartRequest = AutoDialerStartRequest(),
-    db: Session = Depends(get_db),
+        request: AutoDialerStartRequest = AutoDialerStartRequest(),
+        db: Session = Depends(get_db),
 ):
     global CONCURRENCY
     if _state["active"]:
@@ -331,14 +343,17 @@ async def start_auto_dialer(
     asyncio.create_task(_run_auto_dialer(customer_list))
     return {"success": True, "total": len(customer_list)}
 
+
 @router.get("/auto-dialer/events")
 async def auto_dialer_events():
     return StreamingResponse(_sse_generator(), media_type="text/event-stream")
+
 
 @router.post("/auto-dialer/stop")
 async def stop_auto_dialer():
     _state["stop_requested"] = True
     return {"success": True}
+
 
 @router.get("/auto-dialer/status")
 async def get_auto_dialer_status():

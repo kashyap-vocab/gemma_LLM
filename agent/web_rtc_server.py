@@ -4,6 +4,8 @@ import re
 import sys
 from pathlib import Path
 
+from livekit.plugins.turn_detector.multilingual import MultilingualModel
+
 # Ensure project root is on sys.path
 _project_root = Path(__file__).parent.parent
 if str(_project_root) not in sys.path:
@@ -45,7 +47,6 @@ from livekit.agents import (
     room_io,
 )
 from livekit.plugins import deepgram, google, noise_cancellation, silero
-from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
 from agent.metrics import MetricsTracker
 from agent.sarvam_tts_v3_simran_pcm import SarvamFixedTTS
@@ -81,6 +82,7 @@ def prewarm(proc: agents.JobProcess):
         temperature=0.1,
         thinking_config=types.ThinkingConfig(include_thoughts=False),
     )
+    proc.userdata["turn_detection"] = MultilingualModel()
 
 
 # ============================================================================
@@ -211,11 +213,8 @@ async def my_agent(ctx: agents.JobContext):
         model="bulbul:v3",
         pace=1.0,
     )
-    # Overlap Sarvam cold start with session.start() + bridge wait (hidden latency).
-    tts_warmup_task = asyncio.create_task(_warmup_sarvam_tts(session_tts))
-
     session = AgentSession(
-        turn_detection=MultilingualModel(),  # type: ignore[arg-type]
+        turn_detection=ctx.proc.userdata["turn_detection"],
         min_endpointing_delay=0.1,
         max_endpointing_delay=0.4,
         stt=ctx.proc.userdata["stt"],
@@ -322,7 +321,6 @@ async def my_agent(ctx: agents.JobContext):
             await asyncio.sleep(0.35)
         except asyncio.TimeoutError:
             logger.warning(f"[{call_id}] ⚠️ SmartFlo bridge never connected within 120s — aborting")
-            tts_warmup_task.cancel()
             return
 
         # Get transliterated name (should be done by now — customer took time to answer)
@@ -333,12 +331,6 @@ async def my_agent(ctx: agents.JobContext):
             except Exception:
                 hindi_name = customer_name
 
-        # Ensure Sarvam warmup finished (or cap wait) before the real greeting.
-        try:
-            await asyncio.wait_for(tts_warmup_task, timeout=6.0)
-        except (asyncio.TimeoutError, asyncio.CancelledError):
-            pass
-
         name_part = f"{hindi_name} जी" if hindi_name else "आप"
         greeting_text = (
             f"नमस्ते, मैं एल एंड टी फाइनेंस की तरफ़ से बात कर रही हूँ। "
@@ -346,10 +338,7 @@ async def my_agent(ctx: agents.JobContext):
             f"क्या मेरी बात {name_part} से हो रही है?"
         )
 
-        # Explicitly buffer the greeting — ensures it appears in the transcript
-        # even if session.say() is interrupted or the call drops during TTS.
         buffer_transcript_turn(call_id=call_id, role="assistant", text=greeting_text)
-
         logger.info(f"[{call_id}] 🎙️ Playing greeting for {customer_name}")
         try:
             await asyncio.wait_for(session.say(greeting_text, allow_interruptions=True), timeout=30.0)
@@ -360,7 +349,6 @@ async def my_agent(ctx: agents.JobContext):
         # call_end_signals[call_id] was already created before session.start().
         # _signal_hangup() (passed to SurveyAssistant) will set it when end_call()
         # is invoked by the LLM, unblocking the task below to publish hangup.
-
         async def _wait_and_signal_hangup():
             await call_end_signals[call_id].wait()
             await asyncio.sleep(8.0)
