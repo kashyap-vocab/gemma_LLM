@@ -16,8 +16,6 @@ from db.models import CallMetadata
 load_dotenv()
 
 
-# ── Updated Database Helpers (ORM) ───────────────────────────────────────────
-
 def _set_call_status_active(room_name: str) -> None:
     """Update call_metadata status to 'active' using call_id (Primary Key)."""
     with SessionLocal() as db:
@@ -206,9 +204,3 @@ async def smartflo_websocket_endpoint(websocket: WebSocket):
             # Ensure DB is updated even if WebSocket drops unexpectedly
             _set_call_status_terminal(bridge.room_name, "completed")
             await bridge.teardown()
-
-
-if __name__ == "__main__":
-    import uvicorn
-
-    uvicorn.run(app, host="0.0.0.0", port=8319)
