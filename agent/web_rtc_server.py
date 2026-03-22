@@ -11,26 +11,14 @@ _project_root = Path(__file__).parent.parent
 if str(_project_root) not in sys.path:
     sys.path.insert(0, str(_project_root))
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
-
 # Keep low-level library loggers quiet; show agent-level logs
-for _noisy in (
-        "livekit",
-        "livekit.rtc",
-        "livekit.agents",
-        "livekit.plugins.sarvam",
-        "livekit.plugins.sarvam.log",
-        "livekit.plugins.deepgram",
-        "livekit.plugins.google",
-        "livekit.plugins.silero",
-        "livekit.plugins.turn_detector",
-        "livekit.plugins.noise_cancellation",
-        "httpx",
-        "httpcore",
-        "google_genai",
-        "google.genai",
-        "grpc",
-):
+# Note: do NOT call logging.basicConfig() here — the LiveKit agents framework sets up its own
+# handlers (text + JSON) for each worker process. Calling basicConfig adds an extra text handler
+# that causes every log line to appear twice.
+for _noisy in ("livekit", "livekit.rtc", "livekit.agents", "livekit.plugins.sarvam", "livekit.plugins.sarvam.log",
+               "livekit.plugins.deepgram", "livekit.plugins.google", "livekit.plugins.silero",
+               "livekit.plugins.turn_detector", "livekit.plugins.noise_cancellation", "httpx", "httpcore",
+               "google_genai", "google.genai", "grpc",):
     logging.getLogger(_noisy).setLevel(logging.WARNING)
 
 logger = logging.getLogger(__name__)
@@ -49,7 +37,6 @@ from livekit.agents import (
 from livekit.plugins import deepgram, google, noise_cancellation, silero, sarvam
 
 from agent.metrics import MetricsTracker
-from agent.sarvam_tts_v3_simran_pcm import SarvamFixedTTS
 from agent.survey_agent import SurveyAssistant
 
 load_dotenv()
@@ -90,16 +77,6 @@ def prewarm(proc: agents.JobProcess):
 # ============================================================================
 # Main Agent Session
 # ============================================================================
-
-async def _warmup_sarvam_tts(tts_instance: SarvamFixedTTS) -> None:
-    """Prime Sarvam WebSocket/TLS so the first real utterance has lower latency."""
-    try:
-        stream = tts_instance.synthesize("नमस्ते")
-        async for _ in stream:
-            pass
-    except Exception as e:
-        logger.warning("Sarvam TTS warmup failed (non-fatal): %s", e)
-
 
 async def my_agent(ctx: agents.JobContext):
     print(f"✅ Job accepted for room: {ctx.room.name}")
@@ -239,26 +216,23 @@ async def my_agent(ctx: agents.JobContext):
 
     @session.on("conversation_item_added")
     def on_conversation_item_added(event: ConversationItemAddedEvent):
+        from datetime import datetime, timezone
         item = event.item
-        text = (item.text_content or "").strip()
-        role = getattr(item, "role", None)
-        role_str = (getattr(role, "value", None) or getattr(role, "name", None) or str(role)).lower()
-        speaker_id = getattr(item, "speaker_id", None)
-        if role_str == "assistant":
-            text = _sanitize_assistant_text(text)
-        if not text:
+        text_to_store = (item.text_content or "").strip()
+        if not text_to_store:
             return
 
-        transcript_buffer.append((role_str, text, speaker_id))
-        logger.info(f"[{call_id}] [{role_str.upper()}] {text[:120]}")
+        role = getattr(item, "role", None)
+        role_str_to_store = (getattr(role, "value", None) or getattr(role, "name", None) or str(role)).lower()
+        speaker_id_to_store = getattr(item, "speaker_id", None)
+        ts_to_store = datetime.now(timezone.utc)
 
-        if role_str in ("user", "assistant"):
-            buffer_transcript_turn(
-                call_id=call_id,
-                role=role_str,
-                text=text,
-                speaker_id=speaker_id if role_str == "user" else None,
-            )
+        transcript_buffer.append((role_str_to_store, text_to_store, speaker_id_to_store, ts_to_store))
+        logger.info(f"[{call_id}] [{role_str_to_store.upper()}] {text_to_store[:120]}")
+
+        if role_str_to_store in ("user", "assistant"):
+            buffer_transcript_turn(call_id=call_id, role=role_str_to_store, text=text_to_store,
+                                   speaker_id=speaker_id_to_store if role_str_to_store == "user" else None, )
 
     @session.on("metrics_collected")
     def on_metrics_collected(ev: MetricsCollectedEvent):
@@ -385,6 +359,19 @@ async def my_agent(ctx: agents.JobContext):
             print(f"❌ Session Flush Error: {e}")
         finally:
             feedback_sessions.pop(call_id, None)
+        print(f"📋 Transcript summary:")
+        prev_ts = None
+        for idx, entry in enumerate(transcript_buffer):
+            role_str, text, speaker_id = entry[0], entry[1], entry[2]
+            ts = entry[3] if len(entry) > 3 else None
+            if ts and prev_ts:
+                gap = (ts - prev_ts).total_seconds()
+                gap_str = f" (+{gap:.1f}s)" if gap >= 0.5 else ""
+            else:
+                gap_str = ""
+            ts_str = ts.strftime("%H:%M:%S") if ts else ""
+            print(f"   {idx + 1}. [{role_str}] [{ts_str}{gap_str}] {text[:60]}...")
+            prev_ts = ts
 
 
 # ── Helpers used by my_agent ──────────────────────────────────────────────────

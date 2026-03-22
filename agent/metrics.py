@@ -65,10 +65,10 @@ class ThresholdAlert:
 
 class MetricsTracker:
     _STT_LIMIT_MS = 500.0
-    _LLM_TTFT_LIMIT_MS = 1000.0
+    _LLM_TTFT_LIMIT_MS = 500.0
     _TTS_LIMIT_MS = 600.0
     _LLM_LIMIT_MS = 2000.0
-    _TOTAL_LIMIT_MS = 3000.0
+    _TOTAL_LIMIT_MS = 2000.0
 
     def __init__(self) -> None:
         self._usage_collector = metrics.UsageCollector()
