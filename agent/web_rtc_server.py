@@ -370,7 +370,7 @@ async def my_agent(ctx: agents.JobContext):
                 else:
                     gap_str = ""
                 ts_str = ts.strftime("%H:%M:%S") if ts else ""
-                print(f"   {idx + 1}. [{role_str}] [{ts_str}{gap_str}] {text[:60]}...")
+                print(f"   {idx + 1}. [{role_str}] [{ts_str}{gap_str}] {text}")
                 prev_ts = ts
 
 
