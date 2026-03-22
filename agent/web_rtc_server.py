@@ -359,19 +359,19 @@ async def my_agent(ctx: agents.JobContext):
             print(f"❌ Session Flush Error: {e}")
         finally:
             feedback_sessions.pop(call_id, None)
-        print(f"📋 Transcript summary:")
-        prev_ts = None
-        for idx, entry in enumerate(transcript_buffer):
-            role_str, text, speaker_id = entry[0], entry[1], entry[2]
-            ts = entry[3] if len(entry) > 3 else None
-            if ts and prev_ts:
-                gap = (ts - prev_ts).total_seconds()
-                gap_str = f" (+{gap:.1f}s)" if gap >= 0.5 else ""
-            else:
-                gap_str = ""
-            ts_str = ts.strftime("%H:%M:%S") if ts else ""
-            print(f"   {idx + 1}. [{role_str}] [{ts_str}{gap_str}] {text[:60]}...")
-            prev_ts = ts
+            print(f"📋 Transcript summary:")
+            prev_ts = None
+            for idx, entry in enumerate(transcript_buffer):
+                role_str, text, speaker_id = entry[0], entry[1], entry[2]
+                ts = entry[3] if len(entry) > 3 else None
+                if ts and prev_ts:
+                    gap = (ts - prev_ts).total_seconds()
+                    gap_str = f" (+{gap:.1f}s)" if gap >= 0.5 else ""
+                else:
+                    gap_str = ""
+                ts_str = ts.strftime("%H:%M:%S") if ts else ""
+                print(f"   {idx + 1}. [{role_str}] [{ts_str}{gap_str}] {text[:60]}...")
+                prev_ts = ts
 
 
 # ── Helpers used by my_agent ──────────────────────────────────────────────────
