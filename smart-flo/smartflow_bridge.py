@@ -76,7 +76,7 @@ class SmartfloLiveKitBridge:
 
         # Resolve customer phone to match Route 1 naming convention
         self.customer_phone = self._resolve_customer_phone(from_number, to_number)
-        self.room_name = f"call-{self.customer_phone}-{datetime.now()}"
+        self.room_name = f"call-{self.customer_phone}"
         self.room = None
         self.audio_source = None
         self.audio_track = None
