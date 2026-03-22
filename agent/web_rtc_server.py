@@ -82,7 +82,9 @@ def prewarm(proc: agents.JobProcess):
         temperature=0.1,
         thinking_config=types.ThinkingConfig(include_thoughts=False),
     )
-    proc.userdata["turn_detection"] = MultilingualModel()
+    # MultilingualModel is NOT pre-warmed here — its __init__ calls
+    # get_job_context().inference_executor which is unavailable outside a job.
+    # It is instantiated per-session inside my_agent() instead.
 
 
 # ============================================================================
@@ -214,7 +216,7 @@ async def my_agent(ctx: agents.JobContext):
         pace=1.0,
     )
     session = AgentSession(
-        turn_detection=ctx.proc.userdata["turn_detection"],
+        turn_detection=MultilingualModel(),  # type: ignore[arg-type]
         min_endpointing_delay=0.1,
         max_endpointing_delay=0.4,
         stt=ctx.proc.userdata["stt"],
