@@ -188,8 +188,8 @@ async def my_agent(ctx: agents.JobContext):
     # "missing RIFF/WAVE" decoding failures.
     session_tts = sarvam.TTS(
         target_language_code="hi-IN",
-        speaker="simran",
-        model="bulbul:v3",
+        speaker="anushka",
+        model="bulbul:v2",
         pace=1.0,
     )
     session = AgentSession(
