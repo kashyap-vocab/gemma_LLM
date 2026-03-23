@@ -16,7 +16,7 @@ if str(_project_root) not in sys.path:
 # handlers (text + JSON) for each worker process. Calling basicConfig adds an extra text handler
 # that causes every log line to appear twice.
 for _noisy in ("livekit", "livekit.rtc", "livekit.agents", "livekit.plugins.sarvam", "livekit.plugins.sarvam.log",
-               "livekit.plugins.deepgram", "livekit.plugins.google", "livekit.plugins.silero",
+               "livekit.plugins.elevenlabs","livekit.plugins.deepgram", "livekit.plugins.google", "livekit.plugins.silero",
                "livekit.plugins.turn_detector", "livekit.plugins.noise_cancellation", "httpx", "httpcore",
                "google_genai", "google.genai", "grpc",):
     logging.getLogger(_noisy).setLevel(logging.WARNING)
@@ -34,7 +34,7 @@ from livekit.agents import (
     UserInputTranscribedEvent,
     room_io,
 )
-from livekit.plugins import deepgram, google, noise_cancellation, silero, sarvam
+from livekit.plugins import deepgram, elevenlabs, google, noise_cancellation, silero, sarvam
 
 from agent.metrics import MetricsTracker
 from agent.survey_agent import SurveyAssistant
@@ -184,13 +184,11 @@ async def my_agent(ctx: agents.JobContext):
         if call_id in call_end_signals:
             call_end_signals[call_id].set()
 
-    # Use Sarvam bulbul v3 simran, but emit raw PCM to avoid
-    # "missing RIFF/WAVE" decoding failures.
-    session_tts = sarvam.TTS(
-        target_language_code="hi-IN",
-        speaker="simran",
-        model="bulbul:v3",
-        pace=1.0,
+    # ElevenLabs TTS — eleven_turbo_v2_5 supports Hindi natively.
+    # Voice: Aria (default). Change voice_id to swap voices.
+    session_tts = elevenlabs.TTS(
+        model="eleven_turbo_v2_5",
+        language="hi",
     )
     session = AgentSession(
         turn_detection=MultilingualModel(),  # type: ignore[arg-type]
