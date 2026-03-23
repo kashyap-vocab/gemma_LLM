@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 import re
 import sys
 from pathlib import Path
@@ -189,6 +190,7 @@ async def my_agent(ctx: agents.JobContext):
     session_tts = elevenlabs.TTS(
         model="eleven_turbo_v2_5",
         language="hi",
+        voice_id="8baRIHZEGj62eS9YHzC6"
     )
     session = AgentSession(
         turn_detection=MultilingualModel(),  # type: ignore[arg-type]
