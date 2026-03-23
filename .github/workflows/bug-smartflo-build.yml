@@ -97,5 +97,8 @@ jobs:
           envs: AGENT_IMAGE,BRIDGE_IMAGE
           script: |
             cd /tmp
+            docker compose stop api || true
+            docker compose rm -f api || true
+            fuser -k 8000/tcp || true
             docker pull $BRIDGE_IMAGE:latest
             AGENT_IMAGE=$AGENT_IMAGE BRIDGE_IMAGE=$BRIDGE_IMAGE docker compose up -d --force-recreate api

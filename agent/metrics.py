@@ -80,7 +80,7 @@ class MetricsTracker:
             metrics.EOUMetrics: self._apply_eou,
             metrics.LLMMetrics: self._apply_llm,
             metrics.TTSMetrics: self._apply_tts,
-            metrics.VADMetrics: self._apply_vad,
+            # metrics.VADMetrics: self._apply_vad,
         }
 
     def start_turn(self) -> int:
