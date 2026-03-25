@@ -219,18 +219,18 @@ class SarvamFixedTTS(tts.TTS):
     """
 
     def __init__(
-        self,
-        *,
-        target_language_code: str | None = None,
-        speaker: str | None = None,
-        model: str | None = None,
-        pace: float = 1.0,
-        speech_sample_rate: int = 22050,
-        enable_preprocessing: bool = True,
-        pitch: float = 0.0,
-        loudness: float = 1.0,
-        send_completion_event: bool = True,
-        api_key: str | None = None,
+            self,
+            *,
+            target_language_code: str | None = None,
+            speaker: str | None = None,
+            model: str | None = None,
+            pace: float = 1.0,
+            speech_sample_rate: int = 22050,
+            enable_preprocessing: bool = True,
+            pitch: float = 0.0,
+            loudness: float = 1.0,
+            send_completion_event: bool = True,
+            api_key: str | None = None,
     ) -> None:
         self._api_key = api_key or os.environ.get("SARVAM_API_KEY")
         if not self._api_key:
@@ -274,14 +274,13 @@ class SarvamFixedTTS(tts.TTS):
         return "Sarvam"
 
     def stream(
-        self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+            self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> SarvamFixedSynthesizeStream:
         return SarvamFixedSynthesizeStream(tts_instance=self, conn_options=conn_options)  # type: ignore[arg-type]
 
     def synthesize(
-        self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+            self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> tts.ChunkedStream:
         # Implement synthesize() by using streaming and letting the base helper
         # convert it into a chunked stream.
         return self._synthesize_with_stream(text, conn_options=conn_options)
-

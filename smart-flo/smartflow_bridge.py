@@ -1,16 +1,13 @@
-"""
-Smartflo-LiveKit Bridge
-100% ORM-based approach for relational database models.
-"""
-from fastapi import FastAPI, WebSocket
-from livekit import api, rtc
 import asyncio
 import base64
 import json
 import os
 from datetime import datetime, timezone
-from dotenv import load_dotenv
+
 import audioop
+from dotenv import load_dotenv
+from fastapi import FastAPI, WebSocket
+from livekit import api, rtc
 
 # Import ORM components
 from db.database import SessionLocal
@@ -18,8 +15,6 @@ from db.models import CallMetadata
 
 load_dotenv()
 
-
-# ── Updated Database Helpers (ORM) ───────────────────────────────────────────
 
 def _set_call_status_active(room_name: str) -> None:
     """Update call_metadata status to 'active' using call_id (Primary Key)."""
@@ -80,7 +75,6 @@ class SmartfloLiveKitBridge:
         # Resolve customer phone to match Route 1 naming convention
         self.customer_phone = self._resolve_customer_phone(from_number, to_number)
         self.room_name = f"call-{self.customer_phone}"
-
         self.room = None
         self.audio_source = None
         self.audio_track = None
@@ -103,6 +97,7 @@ class SmartfloLiveKitBridge:
             .with_identity(f"smartflo-caller-{self.call_sid}") \
             .with_name("Phone Caller") \
             .with_grants(api.VideoGrants(
+            room_create=True,
             room_join=True,
             room=self.room_name,
             can_publish=True,
@@ -209,9 +204,3 @@ async def smartflo_websocket_endpoint(websocket: WebSocket):
             # Ensure DB is updated even if WebSocket drops unexpectedly
             _set_call_status_terminal(bridge.room_name, "completed")
             await bridge.teardown()
-
-
-if __name__ == "__main__":
-    import uvicorn
-
-    uvicorn.run(app, host="0.0.0.0", port=8319)

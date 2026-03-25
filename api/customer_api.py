@@ -10,15 +10,15 @@ import pandas as pd
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict
-from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from api.smartflo_client import get_smartflo_client
 from db.database import get_db
 from db.models import CallMetadata, Customer
-from api.smartflo_client import get_smartflo_client
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
 
 # ── Pydantic schemas ──────────────────────────────────────────────────────────
 
@@ -226,7 +226,6 @@ async def update_call_context(request: CallContextRequest, db: Session = Depends
     """
     phone_normalized = normalize_phone(request.phone_number)
     room_name = f"call-{phone_normalized}"
-
     agreement_no = request.agreement_no
     if not agreement_no:
         cust = db.query(Customer).filter(Customer.contact_number == phone_normalized).first()
@@ -258,9 +257,9 @@ async def update_call_context(request: CallContextRequest, db: Session = Depends
     })
 
     async with livekit_api.LiveKitAPI(
-        url=lk_url,
-        api_key=os.getenv("LIVEKIT_API_KEY", ""),
-        api_secret=os.getenv("LIVEKIT_API_SECRET", ""),
+            url=lk_url,
+            api_key=os.getenv("LIVEKIT_API_KEY", ""),
+            api_secret=os.getenv("LIVEKIT_API_SECRET", ""),
     ) as lk:
         try:
             await lk.room.delete_room(livekit_api.DeleteRoomRequest(room=room_name))
@@ -271,11 +270,15 @@ async def update_call_context(request: CallContextRequest, db: Session = Depends
             name=room_name,
             empty_timeout=300,
             metadata=metadata,
-            agents=[livekit_api.RoomAgentDispatch(
-                agent_name="LTFS_SurveyAgent-Soma",
-                metadata=metadata,
-            )],
         ))
+
+        await lk.agent_dispatch.create_dispatch(
+            livekit_api.CreateAgentDispatchRequest(
+                agent_name="LTFS_SurveyAgent-Soma",
+                room=room_name,
+                metadata=metadata,
+            )
+        )
 
     return {"success": True, "room_name": room_name, "agreement_no": agreement_no}
 
@@ -322,11 +325,11 @@ async def trigger_call(request: CallTriggerRequest, db: Session = Depends(get_db
 
 @router.get("/customers/download")
 async def download_data(
-    start=Query(default=""),
-    end=Query(default=""),
-    disposition=Query(default="All"),
-    table=Query(default="customer_feedback"),
-    db: Session = Depends(get_db),
+        start=Query(default=""),
+        end=Query(default=""),
+        disposition=Query(default="All"),
+        table=Query(default="customer_feedback"),
+        db: Session = Depends(get_db),
 ):
     """
     Export table data as an Excel file.

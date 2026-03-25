@@ -16,6 +16,7 @@ extensions = [
     Extension("agent.survey_agent", ["agent/survey_agent.py"]),
     Extension("agent.web_rtc_server", ["agent/web_rtc_server.py"]),
     Extension("smartflow_bridge", ["smart-flo/smartflow_bridge.py"]),
+    Extension("scripts.backfill_feedback_with_llm", ["scripts/backfill_feedback_with_llm.py"]),
 ]
 
 
