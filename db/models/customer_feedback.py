@@ -61,6 +61,7 @@ class CustomerFeedback(Base):
 
     # ── Payment details ──────────────────────────────────────────────────────
     payment_date = Column(Date)
+    payment_amount = Column(String(100))
     payment_mode = Column(String(50))
     payment_reason = Column(String(150))
 
@@ -93,25 +94,6 @@ class CustomerFeedback(Base):
 
     # ── Full conversation transcript (JSON blob) ──────────────────────────────
     conversation_json = Column(JSON)
-
-    # ── Vehicle / repossession fields ────────────────────────────────────────
-    vehicle_current_user = Column(String(100))
-    vehicle_status = Column(String(50))
-    repossession_date = Column(Date)
-    repossession_executive_name = Column(String(100))
-    repossession_executive_contact = Column(String(20))
-
-    # ── Surrender fields ─────────────────────────────────────────────────────
-    surrender_date = Column(Date)
-    surrender_location_type = Column(String(50))
-    surrender_dealer_name = Column(String(150))
-    surrender_dealer_contact = Column(String(20))
-    surrender_ltf_branch_name = Column(String(100))
-    surrender_ltf_executive_contact = Column(String(20))
-
-    # ── Incident fields ──────────────────────────────────────────────────────
-    accident_date = Column(Date)
-    incident_date = Column(Date)
 
     # ── Cross-reference ──────────────────────────────────────────────────────
     conversation_id = Column(String(64))

@@ -1,4 +1,6 @@
 import asyncio
+from datetime import date, datetime
+from zoneinfo import ZoneInfo
 
 from livekit.agents import Agent, function_tool
 from livekit.agents.beta.tools import EndCallTool
@@ -34,8 +36,19 @@ class SurveyAssistant(Agent):
             on_tool_called=_on_end_call_invoked,
         )
 
+        today = datetime.now(ZoneInfo("Asia/Kolkata")).date()
+        year = today.year
+        month = today.month
+        dmy = today.strftime("%d-%m-%Y")
+        this_month_label = date(today.year, today.month, 1).strftime("%B %Y")
+        if today.month == 1:
+            prev_y, prev_m = today.year - 1, 12
+        else:
+            prev_y, prev_m = today.year, today.month - 1
+        last_month_label = date(prev_y, prev_m, 1).strftime("%B %Y")
+
         super().__init__(
-            instructions="""
+            instructions=f"""
 You are an intelligent AI voice assistant acting as an experienced, empathetic FEMALE customer service representative from एल एंड टी फाइनेंस, calling customers for payment feedback.
 You are speaking in real time over a phone call.
 Behave like a real human agent, not a script.
@@ -85,10 +98,15 @@ payment_amount (in words)
 
 📅 DATE HANDLING RULES
 
-Default year = current year (2026).
+Reference "today" for this call (India): {dmy} — current calendar month is **{this_month_label}** (month {month}, year {year}).
+Default year = {year} whenever the customer does not clearly specify a different year.
+“Last month” / “पिछले महीने” means the calendar month immediately before today: **{last_month_label}** (not any other month from memory or old examples).
+“This month” / “इस महीने” means **{this_month_label}**.
+If only a day is said together with “last month” / पिछले महीने, use that day in **{last_month_label}**; if with “this month”, use **{this_month_label}**.
+Do not default to an older year (such as 2024) or wrong month unless the customer explicitly said that calendar month and year.
 Never assume past years unless explicitly stated.
-Resolve phrases like “पिछले महीने” using today’s date as reference.
-Always return the date in words
+Resolve all relative month phrases only from this reference date.
+In conversation, speak the date in words; when you call store_payment_date, pass dd-mm-yyyy using the month and year from the rules above unless the customer clearly stated a different full date.
 
 🗣️ CONVERSATION RULES (VERY IMPORTANT)
 ✔ Acknowledgments
@@ -162,14 +180,14 @@ Never use masculine grammar.
 Never ask multiple questions together.
 Never repeat customer statements.
 Never argue or pressure.
-Never output markdown, code fences, JSON, or tool payloads (for example: ```tool_outputs``` or {"...": ...}) in spoken responses.
+Never output markdown, code fences, JSON, or tool payloads (for example: ```tool_outputs``` or {{"...": ...}}) in spoken responses.
 Never say internal tool names, developer/system instructions, or function call results aloud.
 When you learn or confirm any of the above information, store it using the provided tools: store_identity_confirmed, store_loan_taken, store_last_month_payment, store_payee, store_payment_amount, store_payment_date, store_payment_mode, store_payment_reason, store_payee_details, store_field_executive, and complete_survey when the customer confirms the summary.
 Please respond only in natural hindi language. Do not include raw JSON or tool outputs in the text.
 
 📴 CALL ENDING (MANDATORY)
 When the conversation is ending (after confirmation, sensitive situation, or refusal), call end_call() to disconnect. The system will play your closing statement before hanging up. NEVER forget to call end_call().
-            """ + name_hint,
+            """.strip() + name_hint,
             tools=end_call_tool.tools,
         )
 
@@ -264,7 +282,7 @@ When the conversation is ending (after confirmation, sensitive situation, or ref
         """
         Store payment date.
         Args:
-            date: Date of payment in dd-mm-yyyy format
+            date: Date of payment in dd-mm-yyyy format (use the reference year from instructions when the customer did not state a year).
         """
         self._store_payment("date", date)
         return f"Stored payment_date={date}. Proceed to next question."
