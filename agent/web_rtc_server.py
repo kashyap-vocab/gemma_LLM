@@ -194,9 +194,10 @@ async def my_agent(ctx: agents.JobContext):
     # )
 
     # Sarvam TTS: bulbul-v3 model, simran voice
-    session_tts = SarvamFixedTTS(
+    session_tts = sarvam.TTS(
         model="bulbul:v3",
         speaker="simran",
+        pace=1.0,
         target_language_code="hi-IN",
     )
     session = AgentSession(
