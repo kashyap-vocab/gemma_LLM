@@ -38,7 +38,6 @@ from livekit.agents import (
 from livekit.plugins import deepgram, google, noise_cancellation, silero, sarvam
 
 from agent.metrics import MetricsTracker
-from agent.sarvam_tts_v3_simran_pcm import SarvamFixedTTS
 from agent.survey_agent import SurveyAssistant
 
 load_dotenv()
