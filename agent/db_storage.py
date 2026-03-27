@@ -11,7 +11,7 @@ Session-based call state management:
 """
 import asyncio
 import logging
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Any, Optional, Tuple
 
 from db.database import SessionLocal
@@ -58,6 +58,24 @@ def _to_numeric(v: Any) -> Optional[float]:
         return float(v)
     except (TypeError, ValueError):
         return None
+
+
+def _coerce_payment_date(value: Any) -> Optional[date]:
+    """Normalize agent/session payment dates (e.g. dd-mm-yyyy) to a DB date."""
+    if value is None or value == "":
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    text = str(value).strip()
+    for fmt in ("%d-%m-%Y", "%Y-%m-%d", "%d/%m/%Y"):
+        try:
+            return datetime.strptime(text, fmt).date()
+        except ValueError:
+            continue
+    logger.warning("Could not parse payment_date %r; storing null", value)
+    return None
 
 
 # ── Call metadata lookup ──────────────────────────────────────────────────────
@@ -244,7 +262,10 @@ def _persist_feedback_to_db_sync(call_id: str, agreement_no: Optional[str] = Non
             feedback.payee = payment.get("payee") or data.get("payee")
             feedback.payee_name = payment.get("payee_name") or data.get("payee_name")
             feedback.payee_contact = payment.get("payee_contact") or data.get("payee_contact")
-            feedback.payment_date = payment.get("date") or data.get("payment_date")
+            feedback.payment_date = _coerce_payment_date(
+                payment.get("date") or data.get("payment_date")
+            )
+            feedback.payment_amount = payment.get("amount") or data.get("payment_amount")
             feedback.payment_mode = payment.get("mode") or data.get("payment_mode")
             feedback.payment_reason = payment.get("reason") or data.get("payment_reason")
 

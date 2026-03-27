@@ -13,6 +13,7 @@ import sys
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
 from google import genai
@@ -99,6 +100,14 @@ def _safe_str(value: Any) -> str | None:
 
 
 def _infer_feedback_from_transcript(client: genai.Client, transcript: str) -> dict[str, Any]:
+    ref = datetime.now(ZoneInfo("Asia/Kolkata")).date()
+    ref_year = ref.year
+    this_month_label = date(ref.year, ref.month, 1).strftime("%B %Y")
+    if ref.month == 1:
+        prev_y, prev_m = ref.year - 1, 12
+    else:
+        prev_y, prev_m = ref.year, ref.month - 1
+    last_month_label = date(prev_y, prev_m, 1).strftime("%B %Y")
     prompt = f"""
 You are extracting structured call feedback for a loan payment call.
 Given transcript lines, return STRICT JSON only with this exact schema:
@@ -110,6 +119,7 @@ Given transcript lines, return STRICT JSON only with this exact schema:
   "payee_name": string|null,
   "payee_contact": string|null,
   "payment_date": "YYYY-MM-DD"|null,
+  "payment_amount": string|null,
   "payment_mode": string|null,
   "payment_reason": string|null,
   "field_executive_name": string|null,
@@ -123,6 +133,8 @@ Given transcript lines, return STRICT JSON only with this exact schema:
 
 Rules:
 - Use null when unknown. Never invent facts.
+- Reference "today" for this extraction: {ref.isoformat()}. Current calendar month: **{this_month_label}** (year {ref_year}). "Last month" / equivalent Hindi phrases mean **{last_month_label}**; "this month" means **{this_month_label}**. Resolve relative months only from this reference — never a stale month/year from training defaults.
+- When the transcript implies a date but does not name a year, use {ref_year}. When it implies "last month" with only a day, use month/year of **{last_month_label}**. Do not default payment_date to 2024 (or any stale year) unless the transcript explicitly states that year.
 - last_month_payment must be boolean or null.
 - payment_date must be YYYY-MM-DD or null.
 - Classify call using this exact taxonomy:
@@ -274,6 +286,7 @@ def run_backfill_once() -> dict[str, int]:
             feedback.payee_name = _safe_str(inferred.get("payee_name"))
             feedback.payee_contact = _safe_str(inferred.get("payee_contact"))
             feedback.payment_date = _to_date(inferred.get("payment_date"))
+            feedback.payment_amount = _safe_str(inferred.get("payment_amount"))
             feedback.payment_mode = _safe_str(inferred.get("payment_mode"))
             feedback.payment_reason = _safe_str(inferred.get("payment_reason"))
             feedback.field_executive_name = _safe_str(inferred.get("field_executive_name"))
