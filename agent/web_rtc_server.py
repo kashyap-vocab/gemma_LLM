@@ -35,9 +35,10 @@ from livekit.agents import (
     UserInputTranscribedEvent,
     room_io,
 )
-from livekit.plugins import deepgram, elevenlabs, google, noise_cancellation, silero, sarvam
+from livekit.plugins import deepgram, google, noise_cancellation, silero, sarvam
 
 from agent.metrics import MetricsTracker
+from agent.sarvam_tts_v3_simran_pcm import SarvamFixedTTS
 from agent.survey_agent import SurveyAssistant
 
 load_dotenv()
@@ -185,12 +186,18 @@ async def my_agent(ctx: agents.JobContext):
         if call_id in call_end_signals:
             call_end_signals[call_id].set()
 
-    # ElevenLabs TTS — eleven_turbo_v2_5 supports Hindi natively.
-    # Voice: Aria (default). Change voice_id to swap voices.
-    session_tts = elevenlabs.TTS(
-        model="eleven_turbo_v2_5",
-        language="hi",
-        voice_id="XswejgPhV7IAyZmwhk56"
+    # ElevenLabs TTS (disabled):
+    # session_tts = elevenlabs.TTS(
+    #     model="eleven_turbo_v2_5",
+    #     language="hi",
+    #     voice_id="XswejgPhV7IAyZmwhk56"
+    # )
+
+    # Sarvam TTS: bulbul-v3 model, simran voice
+    session_tts = SarvamFixedTTS(
+        model="bulbul:v3",
+        speaker="simran",
+        target_language_code="hi-IN",
     )
     session = AgentSession(
         turn_detection=MultilingualModel(),  # type: ignore[arg-type]
