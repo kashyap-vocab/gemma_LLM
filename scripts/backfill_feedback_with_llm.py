@@ -15,8 +15,8 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
+import httpx
 from dotenv import load_dotenv
-from google import genai
 from sqlalchemy import func
 
 # Ensure project root is on sys.path when running as a script.
@@ -99,7 +99,10 @@ def _safe_str(value: Any) -> str | None:
     return text or None
 
 
-def _infer_feedback_from_transcript(client: genai.Client, transcript: str) -> dict[str, Any]:
+_LOCAL_LLM_URL = "http://192.168.30.239:6000"
+
+
+def _infer_feedback_from_transcript(transcript: str) -> dict[str, Any]:
     ref = datetime.now(ZoneInfo("Asia/Kolkata")).date()
     ref_year = ref.year
     this_month_label = date(ref.year, ref.month, 1).strftime("%B %Y")
@@ -163,11 +166,18 @@ Transcript:
 {transcript}
 """.strip()
 
-    resp = client.models.generate_content(
-        model="gemini-2.0-flash",
-        contents=prompt,
+    resp = httpx.post(
+        f"{_LOCAL_LLM_URL}/chat",
+        json={
+            "messages": [{"role": "user", "content": prompt}],
+            "max_new_tokens": 512,
+            "temperature": 0.1,
+            "stream": False,
+        },
+        timeout=60.0,
     )
-    raw = (resp.text or "").strip()
+    resp.raise_for_status()
+    raw = (resp.json().get("content") or "").strip()
     # Guard against fenced responses.
     if raw.startswith("```"):
         raw = raw.strip("`")
@@ -216,10 +226,6 @@ def _pick_latest_turn_set(db, agreement_no: str) -> tuple[str | None, list[Conve
 def run_backfill_once() -> dict[str, int]:
     """Run one LLM backfill pass and return counters."""
     load_dotenv()
-    if not os.getenv("GOOGLE_API_KEY"):
-        raise RuntimeError("GOOGLE_API_KEY is required for LLM backfill.")
-
-    client = genai.Client()
 
     inserted = 0
     updated = 0
@@ -256,7 +262,7 @@ def run_backfill_once() -> dict[str, int]:
                 continue
 
             try:
-                inferred = _infer_feedback_from_transcript(client, transcript)
+                inferred = _infer_feedback_from_transcript(transcript)
             except Exception as e:
                 print(
                     f"[LLM-BACKFILL][WARN] {agreement_no} ({call_id}) - "

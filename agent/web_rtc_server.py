@@ -24,9 +24,11 @@ for _noisy in ("livekit", "livekit.rtc", "livekit.agents", "livekit.plugins.sarv
 
 logger = logging.getLogger(__name__)
 
+import httpx
+from agent.custom_llm import LocalGemmaLLM, LOCAL_LLM_URL as _LOCAL_LLM_URL
+from agent.custom_tts import MatchTTSPlugin
+
 from dotenv import load_dotenv
-from google import genai
-from google.genai import types
 from livekit import agents, rtc
 from livekit.agents import (
     AgentSession,
@@ -35,7 +37,7 @@ from livekit.agents import (
     UserInputTranscribedEvent,
     room_io,
 )
-from livekit.plugins import deepgram, google, noise_cancellation, silero, sarvam
+from livekit.plugins import deepgram, noise_cancellation, silero, sarvam
 
 from agent.metrics import MetricsTracker
 from agent.survey_agent import SurveyAssistant
@@ -65,11 +67,7 @@ def prewarm(proc: agents.JobProcess):
     print("🔥 PREWARMING MODELS...")
     proc.userdata["vad"] = silero.VAD.load()
     proc.userdata["stt"] = deepgram.STT(model="nova-3", language="hi")
-    proc.userdata["llm"] = google.LLM(
-        model="gemini-2.0-flash",
-        temperature=0.1,
-        thinking_config=types.ThinkingConfig(include_thoughts=False),
-    )
+    proc.userdata["llm"] = LocalGemmaLLM(temperature=0.1)
     # MultilingualModel is NOT pre-warmed here — its __init__ calls
     # get_job_context().inference_executor which is unavailable outside a job.
     # It is instantiated per-session inside my_agent() instead.
@@ -193,12 +191,17 @@ async def my_agent(ctx: agents.JobContext):
     # )
 
     # Sarvam TTS: bulbul-v3 model, simran voice
-    session_tts = sarvam.TTS(
-        model="bulbul:v3",
-        speaker="simran",
-        pace=1.0,
-        target_language_code="hi-IN",
+    # session_tts = sarvam.TTS(
+    #     model="bulbul:v3",
+    #     speaker="simran",
+    #     pace=1.0,
+    #     target_language_code="hi-IN",
+    # )
+    session_tts = MatchTTSPlugin(
+        api_url=os.getenv("MATCH_TTS_URL", "http://192.168.30.251:6002/synthesize"),
+        sample_rate=int(os.getenv("MATCH_TTS_SAMPLE_RATE", "22050")),
     )
+
     session = AgentSession(
         turn_detection=MultilingualModel(),  # type: ignore[arg-type]
         min_endpointing_delay=0.1,
@@ -393,20 +396,32 @@ def _update_call_status_in_bg(call_id: str) -> None:
 
 
 async def _transliterate_name(name: str) -> str:
-    """Convert an English Indian name to Hindi Devanagari via Gemini."""
+    """Convert an English Indian name to Hindi Devanagari via local Gemma LLM."""
     try:
-        client = genai.Client()
-        resp = await asyncio.wait_for(
-            client.aio.models.generate_content(
-                model="gemini-2.0-flash",
-                contents=(
-                    "Convert this Indian name from English to Hindi Devanagari script. "
-                    f"Reply with ONLY the Devanagari name: {name}"
+        async with httpx.AsyncClient() as client:
+            resp = await asyncio.wait_for(
+                client.post(
+                    f"{_LOCAL_LLM_URL}/chat",
+                    json={
+                        "messages": [
+                            {
+                                "role": "user",
+                                "content": (
+                                    "Convert this Indian name from English to Hindi Devanagari script. "
+                                    f"Reply with ONLY the Devanagari name: {name}"
+                                ),
+                            }
+                        ],
+                        "max_new_tokens": 32,
+                        "temperature": 0.1,
+                        "stream": False,
+                    },
+                    timeout=5.0,
                 ),
-            ),
-            timeout=5.0,
-        )
-        return resp.text.strip()
+                timeout=5.0,
+            )
+        resp.raise_for_status()
+        return resp.json().get("content", name).strip()
     except Exception as e:
         logger.warning(f"Transliteration failed for '{name}': {e}")
         return name
