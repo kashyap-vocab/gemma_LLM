@@ -179,9 +179,27 @@ async def my_agent(ctx: agents.JobContext):
     bridge_connected = asyncio.Event()
 
     def _signal_hangup() -> None:
-        """Called by SurveyAssistant when the LLM invokes end_call()."""
+        """
+        Called either by SurveyAssistant.EndCallTool (legacy tool-call path)
+        or by LocalGemmaLLM when the model emits continue_conversation=false
+        (current path, since the local model cannot do native tool calls).
+        """
         if call_id in call_end_signals:
             call_end_signals[call_id].set()
+
+    # Wire the LLM callback so a JSON {"continue_conversation": false} response
+    # triggers the same hangup flow as EndCallTool. The LLM instance is shared
+    # across calls in this worker process, so we set this per-call and clear
+    # it again in the finally block.
+    _llm_instance = ctx.proc.userdata.get("llm")
+    if _llm_instance is not None:
+        _llm_instance.on_end_conversation = _signal_hangup
+        # Per-turn dynamic system message: feeds Gemma the live slot
+        # tracker (📋 COLLECTED / STILL NEED) so it stops re-asking
+        # already-answered questions. Reads from feedback_sessions[call_id]
+        # which is updated by the slot extractor on every user transcript.
+        from agent.slot_extractor import build_collected_block
+        _llm_instance.get_dynamic_context = lambda cid=call_id: build_collected_block(cid)
 
     # ElevenLabs TTS (disabled):
     # session_tts = elevenlabs.TTS(
@@ -198,8 +216,8 @@ async def my_agent(ctx: agents.JobContext):
     #     target_language_code="hi-IN",
     # )
     session_tts = MatchTTSPlugin(
-        api_url=os.getenv("MATCH_TTS_URL", "http://192.168.30.251:6002/synthesize"),
-        sample_rate=int(os.getenv("MATCH_TTS_SAMPLE_RATE", "22050")),
+        api_url=os.getenv("CUSTOM_TTS_URL", "http://192.168.30.251:6002/synthesize"),
+        sample_rate=int(os.getenv("CUSTOM_TTS_SAMPLE_RATE", "22050")),
     )
 
     session = AgentSession(
@@ -213,14 +231,22 @@ async def my_agent(ctx: agents.JobContext):
         preemptive_generation=True,
     )
 
-    @session.on("user_input_transcribed")
-    def on_user_input_transcribed(ev: UserInputTranscribedEvent):
-        if ev.is_final:
-            logger.info(f"[{call_id}] 👤 User Speech: {ev.transcript}")
-
     @session.on("error")
     def on_session_error(err):
         logger.error(f"[{call_id}] ❌ Session Error: {err}")
+
+    # Set when the agent finishes speaking AFTER the LLM has signalled hangup.
+    # We use this to know that the closing TTS has been pushed into the
+    # SmartFlo bridge, instead of waiting a fixed delay.
+    closing_tts_done = asyncio.Event()
+
+    @session.on("agent_state_changed")
+    def on_agent_state_changed(ev):
+        new_state = getattr(ev, "new_state", None) or getattr(ev, "state", None)
+        new_state_str = str(getattr(new_state, "value", new_state) or "").lower()
+        end_signal = call_end_signals.get(call_id)
+        if end_signal is not None and end_signal.is_set() and new_state_str in ("listening", "idle"):
+            closing_tts_done.set()
 
     transcript_buffer = []
 
@@ -243,6 +269,16 @@ async def my_agent(ctx: agents.JobContext):
         if role_str_to_store in ("user", "assistant"):
             buffer_transcript_turn(call_id=call_id, role=role_str_to_store, text=text_to_store,
                                    speaker_id=speaker_id_to_store if role_str_to_store == "user" else None, )
+
+        # Run the slot extractor on every user utterance so feedback_sessions
+        # always reflects the latest known state. The dynamic context callback
+        # on the LLM will pick this up on the next turn.
+        if role_str_to_store == "user":
+            try:
+                from agent.slot_extractor import update_slots_from_user
+                update_slots_from_user(call_id, text_to_store)
+            except Exception as exc:
+                logger.error(f"[{call_id}] slot extractor failed: {exc}")
 
     @session.on("metrics_collected")
     def on_metrics_collected(ev: MetricsCollectedEvent):
@@ -337,7 +373,24 @@ async def my_agent(ctx: agents.JobContext):
         # is invoked by the LLM, unblocking the task below to publish hangup.
         async def _wait_and_signal_hangup():
             await call_end_signals[call_id].wait()
-            await asyncio.sleep(8.0)
+            # Wait for the agent to finish speaking the closing line
+            # (agent_state → listening means LiveKit has pushed the last
+            # TTS frame into the bridge). Safety cap so a stuck TTS can
+            # never wedge the call open.
+            try:
+                await asyncio.wait_for(closing_tts_done.wait(), timeout=20.0)
+            except asyncio.TimeoutError:
+                logger.warning(
+                    f"[{call_id}] Timed out waiting for closing TTS to finish; "
+                    f"hanging up anyway."
+                )
+            # Small flush delay so SmartFlo's downstream playout buffer
+            # can drain before we drop the WebSocket — otherwise the
+            # customer may hear the last syllable clipped. Tunable via
+            # HANGUP_FLUSH_DELAY (set to 0 for hardest cut).
+            flush_delay = float(os.getenv("HANGUP_FLUSH_DELAY", "1.0"))
+            if flush_delay > 0:
+                await asyncio.sleep(flush_delay)
             try:
                 import json as _j
                 hangup_msg = _j.dumps({"action": "hangup"}).encode("utf-8")
@@ -361,6 +414,9 @@ async def my_agent(ctx: agents.JobContext):
 
     finally:
         call_end_signals.pop(call_id, None)
+        if _llm_instance is not None:
+            _llm_instance.on_end_conversation = None
+            _llm_instance.get_dynamic_context = None
         tracker.print_session_summary(call_id=call_id, agreement_no=agreement_no)
         try:
             from agent.db_storage import _persist_feedback_to_db_sync

@@ -81,6 +81,11 @@ class SmartfloLiveKitBridge:
         self.ws = None
         self.chunk_counter = 1
         self._closed = asyncio.Event()
+        # Used by the mark_and_close path: we send a SmartFlo `mark` event
+        # after the closing TTS audio and only tear down the WS once SmartFlo
+        # echoes that same mark name back (= audio has actually played out).
+        self._pending_mark: str | None = None
+        self._mark_echo: asyncio.Event | None = None
 
     @staticmethod
     def _resolve_customer_phone(from_number: str = None, to_number: str = None) -> str:
@@ -115,8 +120,12 @@ class SmartfloLiveKitBridge:
         def on_data_received(data: rtc.DataPacket):
             try:
                 payload = json.loads(data.data.decode("utf-8"))
-                if payload.get("action") == "hangup":
+                action = payload.get("action")
+                if action == "hangup":
                     self._closed.set()
+                elif action == "mark_and_close":
+                    name = payload.get("mark") or "end_of_call"
+                    asyncio.create_task(self._mark_and_close(name))
             except:
                 pass
 
@@ -131,6 +140,40 @@ class SmartfloLiveKitBridge:
         self._closed.set()
         if self.room:
             await self.room.disconnect()
+
+    async def _mark_and_close(self, name: str):
+        """
+        Send a SmartFlo `mark` event and wait for SmartFlo to echo it back
+        before tearing down. Per the bi-directional audio streaming spec,
+        SmartFlo only echoes a mark when all media queued before that mark
+        has finished playing on the customer's phone — so this gives us an
+        accurate end-of-playback signal instead of a fixed delay.
+
+        Closing the WebSocket here causes SmartFlo to send its own `stop`
+        event upstream, which terminates the PSTN leg cleanly.
+        """
+        if not self.ws:
+            self._closed.set()
+            return
+        self._pending_mark = name
+        self._mark_echo = asyncio.Event()
+        try:
+            await self.ws.send_json({
+                "event": "mark",
+                "streamSid": self.stream_sid,
+                "mark": {"name": name},
+            })
+            print(f"[BRIDGE] 📍 sent mark '{name}', awaiting echo from SmartFlo")
+        except Exception as e:
+            print(f"[BRIDGE] ⚠️ failed to send mark: {e}")
+            self._closed.set()
+            return
+        try:
+            await asyncio.wait_for(self._mark_echo.wait(), timeout=15.0)
+            print(f"[BRIDGE] ✅ mark '{name}' echoed by SmartFlo — closing")
+        except asyncio.TimeoutError:
+            print(f"[BRIDGE] ⏱️ mark '{name}' echo timed out — closing anyway")
+        self._closed.set()
 
     async def forward_livekit_to_smartflo(self, track: rtc.AudioTrack):
         audio_stream = rtc.AudioStream(track, sample_rate=8000, num_channels=1, frame_size_ms=20)
@@ -194,6 +237,14 @@ async def smartflo_websocket_endpoint(websocket: WebSocket):
             elif event == "media" and bridge:
                 payload = data.get("media", {}).get("payload")
                 if payload: await bridge.send_smartflo_audio_to_livekit(payload)
+
+            elif event == "mark" and bridge:
+                # SmartFlo echoes a mark only after all media queued before
+                # it has finished playing on the customer's phone. We use
+                # this as the precise end-of-playback signal for hangup.
+                name = (data.get("mark") or {}).get("name")
+                if name and name == bridge._pending_mark and bridge._mark_echo is not None:
+                    bridge._mark_echo.set()
 
             elif event == "stop":
                 if bridge: _set_call_status_terminal(bridge.room_name, "completed")

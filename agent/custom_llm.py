@@ -7,11 +7,99 @@ Wraps the HTTP API exposed by the local Gemma-2 server
 
 from __future__ import annotations
 
+import json
+import logging
+import os
+import re
+
 import httpx
 from livekit.agents import llm
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN
 
-LOCAL_LLM_URL = "http://192.168.30.239:6000"
+LOCAL_LLM_URL = os.getenv("LOCAL_LLM_URL", "http://192.168.30.239:6000")
+
+logger = logging.getLogger("local-gemma-llm")
+
+_FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$", re.IGNORECASE)
+
+# Phrases that indicate the agent is closing the call. We scan the spoken
+# text (response_text or raw fallback) for any of these and force the
+# hangup signal — this is the intent-based safety net for when the local
+# LLM forgets to set continue_conversation=false in the JSON.
+_END_CALL_PHRASES = (
+    "धन्यवाद",
+    "धन्यबाद",
+    "दिन शुभ हो",
+    "शुभ दिन",
+    "आपका दिन",
+    "अलविदा",
+    "नमस्ते जी",
+    "फ़ीडबैक और समय",
+    "फीडबैक और समय",
+    "बात करूंगी",       # callback rescheduling
+    "बाद में कॉल",
+    "बाद में बात",
+    "फिर कॉल",
+    "फिर बात",
+)
+
+
+def _is_closing_intent(text: str) -> bool:
+    if not text:
+        return False
+    lowered = text.strip()
+    return any(phrase in lowered for phrase in _END_CALL_PHRASES)
+
+
+def _parse_llm_response(content: str) -> tuple[str, bool]:
+    """
+    Parse an LLM response that should look like:
+        {"response_text": "...", "continue_conversation": true|false}
+
+    Returns (response_text, continue_conversation). Falls back to the raw
+    content with continue_conversation=True if parsing fails so a malformed
+    turn never silently hangs up the call.
+    """
+    raw = (content or "").strip()
+    if not raw:
+        return "", True
+
+    # Strip optional ```json ... ``` fences the model may emit.
+    stripped = _FENCE_RE.sub("", raw).strip()
+
+    # Try to find the first JSON object in the string.
+    candidates = [stripped]
+    brace_start = stripped.find("{")
+    brace_end = stripped.rfind("}")
+    if brace_start != -1 and brace_end != -1 and brace_end > brace_start:
+        candidates.append(stripped[brace_start : brace_end + 1])
+
+    for candidate in candidates:
+        try:
+            obj = json.loads(candidate)
+        except Exception:
+            continue
+        if isinstance(obj, dict) and "response_text" in obj:
+            text = str(obj.get("response_text") or "").strip()
+            cont_val = obj.get("continue_conversation", True)
+            if isinstance(cont_val, str):
+                cont = cont_val.strip().lower() not in ("false", "0", "no")
+            else:
+                cont = bool(cont_val)
+            # Intent-based safety net: even if the model said continue=true,
+            # if the spoken line is clearly a closing one, end the call.
+            if cont and _is_closing_intent(text):
+                logger.info("Closing intent detected in response_text; forcing continue_conversation=false")
+                cont = False
+            return text, cont
+
+    logger.warning("LLM response was not valid JSON; forwarding raw text. Snippet: %s", raw[:200])
+    # Pure intent-based fallback: if JSON parsing failed but the raw text
+    # contains a closing phrase, still hang up cleanly.
+    cont = not _is_closing_intent(raw)
+    if not cont:
+        logger.info("Closing intent detected in raw (non-JSON) response; forcing hangup")
+    return raw, cont
 
 
 class LocalGemmaLLM(llm.LLM):
@@ -25,6 +113,15 @@ class LocalGemmaLLM(llm.LLM):
         self._base_url = base_url.rstrip("/")
         self._temperature = temperature
         self._max_new_tokens = max_new_tokens
+        # Set by web_rtc_server per-call. Invoked (sync, no args) when the LLM
+        # emits continue_conversation=false. Used to trigger call termination
+        # without depending on tool-calling support in the local model.
+        self.on_end_conversation = None
+        # Set by web_rtc_server per-call. A zero-arg callable that returns
+        # a string to inject as a fresh system message before every LLM
+        # request — used to feed Gemma a live "📋 LIVE SURVEY STATE" slot
+        # checklist so it stops re-asking already-answered questions.
+        self.get_dynamic_context = None
 
     @property
     def model(self) -> str:
@@ -66,6 +163,19 @@ class LocalGemmaLLMStream(llm.LLMStream):
                 role = "system"
             messages.append({"role": role, "content": text})
 
+        # Inject the live slot tracker as the FINAL system message so it
+        # is the most recent thing the model sees and can never be missed
+        # in a long conversation history.
+        get_ctx = getattr(self._llm, "get_dynamic_context", None)
+        if callable(get_ctx):
+            try:
+                extra = get_ctx()
+                if extra:
+                    messages.append({"role": "system", "content": extra})
+                    logger.info("📋 Injected live slot state into LLM context:\n%s", extra)
+            except Exception as exc:
+                logger.error("get_dynamic_context failed: %s", exc)
+
         async with httpx.AsyncClient() as client:
             resp = await client.post(
                 f"{self._llm._base_url}/chat",
@@ -80,9 +190,25 @@ class LocalGemmaLLMStream(llm.LLMStream):
             resp.raise_for_status()
             content = resp.json().get("content", "")
 
+        logger.info("🤖 LLM raw response: %s", content)
+        response_text, continue_conversation = _parse_llm_response(content)
+        logger.info(
+            "🔊 → TTS: %r | continue_conversation=%s",
+            response_text,
+            continue_conversation,
+        )
+
         self._event_ch.send_nowait(
             llm.ChatChunk(
                 id="local-gemma",
-                delta=llm.ChoiceDelta(role="assistant", content=content),
+                delta=llm.ChoiceDelta(role="assistant", content=response_text),
             )
         )
+
+        if not continue_conversation:
+            cb = getattr(self._llm, "on_end_conversation", None)
+            if cb is not None:
+                try:
+                    cb()
+                except Exception as exc:
+                    logger.error("on_end_conversation callback failed: %s", exc)

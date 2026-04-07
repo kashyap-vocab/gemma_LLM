@@ -99,7 +99,7 @@ def _safe_str(value: Any) -> str | None:
     return text or None
 
 
-_LOCAL_LLM_URL = "http://192.168.30.239:6000"
+_LOCAL_LLM_URL = os.getenv("LOCAL_LLM_URL", "http://192.168.30.239:6000")
 
 
 def _infer_feedback_from_transcript(transcript: str) -> dict[str, Any]:
