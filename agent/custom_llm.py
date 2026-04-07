@@ -16,11 +16,74 @@ import httpx
 from livekit.agents import llm
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN
 
-LOCAL_LLM_URL = os.getenv("LOCAL_LLM_URL", "http://192.168.30.239:6000")
+LOCAL_LLM_URL = os.getenv("LOCAL_LLM_URL", "http://192.168.30.239:9000")
+LOCAL_LLM_MODEL = os.getenv("LOCAL_LLM_MODEL", "google/gemma-2-9b-it")
 
 logger = logging.getLogger("local-gemma-llm")
 
 _FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$", re.IGNORECASE)
+
+
+def _merge_system_into_user(messages: list[dict]) -> list[dict]:
+    """
+    Gemma-2 chat template hard requirements (raises 400 otherwise):
+      - No 'system' role at all.
+      - Must strictly alternate: user, assistant, user, assistant, ...
+      - Must start with 'user'.
+
+    Strategy:
+      1. Fold every system message into the next user message's content
+         (prepend, separated by blank line).  Trailing system content that
+         has no following user turn is appended to the last user turn found,
+         or added as a new user turn of last resort.
+      2. Merge any consecutive same-role messages (can appear after step 1
+         e.g. two user turns in a row).
+      3. If the sequence still starts with 'assistant' (agent sent the
+         greeting before the customer spoke), insert a minimal placeholder
+         user turn so the template is satisfied.
+    """
+    # ── Step 1: fold system messages into the next user turn ─────────────
+    out: list[dict] = []
+    pending_system: list[str] = []
+
+    for msg in messages:
+        role = msg["role"]  # may be str or StrEnum — == comparisons work either way
+        content = str(msg.get("content") or "")
+
+        if role == "system":
+            pending_system.append(content)
+        elif role == "user":
+            if pending_system:
+                content = "\n\n".join(pending_system) + "\n\n" + content
+                pending_system = []
+            out.append({"role": "user", "content": content})
+        else:  # assistant / model
+            out.append({"role": "assistant", "content": content})
+
+    # Flush any trailing system content into the last user turn (or new turn)
+    if pending_system:
+        system_text = "\n\n".join(pending_system)
+        for i in reversed(range(len(out))):
+            if out[i]["role"] == "user":
+                out[i] = {"role": "user", "content": out[i]["content"] + "\n\n" + system_text}
+                break
+        else:
+            out.append({"role": "user", "content": system_text})
+
+    # ── Step 2: merge consecutive same-role messages ──────────────────────
+    merged: list[dict] = []
+    for msg in out:
+        if merged and merged[-1]["role"] == msg["role"]:
+            merged[-1] = {"role": msg["role"],
+                          "content": merged[-1]["content"] + "\n\n" + msg["content"]}
+        else:
+            merged.append(dict(msg))
+
+    # ── Step 3: ensure conversation starts with 'user' ────────────────────
+    if merged and merged[0]["role"] != "user":
+        merged.insert(0, {"role": "user", "content": "[call started]"})
+
+    return merged
 
 # Phrases that indicate the agent is closing the call. We scan the spoken
 # text (response_text or raw fallback) for any of these and force the
@@ -125,7 +188,7 @@ class LocalGemmaLLM(llm.LLM):
 
     @property
     def model(self) -> str:
-        return "gemma-2-9b-it"
+        return LOCAL_LLM_MODEL
 
     @property
     def provider(self) -> str:
@@ -176,19 +239,43 @@ class LocalGemmaLLMStream(llm.LLMStream):
             except Exception as exc:
                 logger.error("get_dynamic_context failed: %s", exc)
 
+        # Gemma-2 chat template rejects system role — fold into user turns
+        vllm_messages = _merge_system_into_user(messages)
+        logger.info("📤 vLLM request messages (%d turns): %s",
+                    len(vllm_messages),
+                    [(m["role"], m["content"][:80]) for m in vllm_messages])
+
         async with httpx.AsyncClient() as client:
+            # --- vLLM OpenAI-compatible endpoint ---
             resp = await client.post(
-                f"{self._llm._base_url}/chat",
+                f"{self._llm._base_url}/v1/chat/completions",
                 json={
-                    "messages": messages,
-                    "max_new_tokens": self._llm._max_new_tokens,
+                    "model": LOCAL_LLM_MODEL,
+                    "messages": vllm_messages,
+                    "max_tokens": self._llm._max_new_tokens,
                     "temperature": self._llm._temperature,
                     "stream": False,
                 },
                 timeout=60.0,
             )
+            if resp.status_code >= 400:
+                logger.error("vLLM %s body: %s", resp.status_code, resp.text[:500])
             resp.raise_for_status()
-            content = resp.json().get("content", "")
+            content = resp.json()["choices"][0]["message"]["content"]
+
+            # --- Old custom /chat endpoint (plain Python server) ---
+            # resp = await client.post(
+            #     f"{self._llm._base_url}/chat",
+            #     json={
+            #         "messages": messages,
+            #         "max_new_tokens": self._llm._max_new_tokens,
+            #         "temperature": self._llm._temperature,
+            #         "stream": False,
+            #     },
+            #     timeout=60.0,
+            # )
+            # resp.raise_for_status()
+            # content = resp.json().get("content", "")
 
         logger.info("🤖 LLM raw response: %s", content)
         response_text, continue_conversation = _parse_llm_response(content)

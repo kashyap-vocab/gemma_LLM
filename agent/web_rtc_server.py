@@ -25,7 +25,7 @@ for _noisy in ("livekit", "livekit.rtc", "livekit.agents", "livekit.plugins.sarv
 logger = logging.getLogger(__name__)
 
 import httpx
-from agent.custom_llm import LocalGemmaLLM, LOCAL_LLM_URL as _LOCAL_LLM_URL
+from agent.custom_llm import LocalGemmaLLM, LOCAL_LLM_URL as _LOCAL_LLM_URL, LOCAL_LLM_MODEL as _LOCAL_LLM_MODEL
 from agent.custom_tts import MatchTTSPlugin
 
 from dotenv import load_dotenv
@@ -38,6 +38,7 @@ from livekit.agents import (
     room_io,
 )
 from livekit.plugins import deepgram, noise_cancellation, silero, sarvam
+from agent.custom_asr_stt import CustomASRSTT
 
 from agent.metrics import MetricsTracker
 from agent.survey_agent import SurveyAssistant
@@ -67,6 +68,13 @@ def prewarm(proc: agents.JobProcess):
     print("🔥 PREWARMING MODELS...")
     proc.userdata["vad"] = silero.VAD.load()
     proc.userdata["stt"] = deepgram.STT(model="nova-3", language="hi")
+
+    # proc.userdata["stt"] = CustomASRSTT(
+    # base_url=os.getenv("ASR_API_URL"),
+    # language="hi-IN",
+    # sample_rate=int(os.getenv("ASR_SAMPLE_RATE", "16000")),
+    # chunk_size=int(os.getenv("ASR_CHUNK_SIZE", "320")))
+
     proc.userdata["llm"] = LocalGemmaLLM(temperature=0.1)
     # MultilingualModel is NOT pre-warmed here — its __init__ calls
     # get_job_context().inference_executor which is unavailable outside a job.
@@ -457,8 +465,9 @@ async def _transliterate_name(name: str) -> str:
         async with httpx.AsyncClient() as client:
             resp = await asyncio.wait_for(
                 client.post(
-                    f"{_LOCAL_LLM_URL}/chat",
+                    f"{_LOCAL_LLM_URL}/v1/chat/completions",
                     json={
+                        "model": _LOCAL_LLM_MODEL,
                         "messages": [
                             {
                                 "role": "user",
@@ -468,7 +477,7 @@ async def _transliterate_name(name: str) -> str:
                                 ),
                             }
                         ],
-                        "max_new_tokens": 32,
+                        "max_tokens": 32,
                         "temperature": 0.1,
                         "stream": False,
                     },
@@ -477,7 +486,7 @@ async def _transliterate_name(name: str) -> str:
                 timeout=5.0,
             )
         resp.raise_for_status()
-        return resp.json().get("content", name).strip()
+        return resp.json()["choices"][0]["message"]["content"].strip()
     except Exception as e:
         logger.warning(f"Transliteration failed for '{name}': {e}")
         return name
