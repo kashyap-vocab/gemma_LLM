@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import logging
 import re
+from datetime import datetime
 from typing import Any
 
 from agent.db_storage import _default_feedback_session, feedback_sessions
@@ -93,8 +94,16 @@ def _norm(text: str) -> str:
     return (text or "").strip().lower()
 
 
+def _last_month_ref() -> tuple[int, int]:
+    """Returns (month, year) for last month relative to today."""
+    today = datetime.now().date()
+    if today.month == 1:
+        return 12, today.year - 1
+    return today.month - 1, today.year
+
+
 def _extract_date(text: str) -> str | None:
-    """Returns dd-mm if a clear date is found (year added downstream)."""
+    """Returns dd-mm-yyyy if a clear date is found."""
     t = text
     # 1) digit + month name (e.g., "26 march", "26 मार्च")
     m = re.search(
@@ -106,11 +115,13 @@ def _extract_date(text: str) -> str | None:
         day = int(m.group(1))
         month = _MONTHS.get(m.group(2).lower())
         if month and 1 <= day <= 31:
-            return f"{day:02d}-{month:02d}"
+            ref_m, ref_y = _last_month_ref()
+            year = ref_y if month == ref_m else datetime.now().year
+            return f"{day:02d}-{month:02d}-{year}"
 
     # 2) Hindi number-word + month (e.g., "छब्बीस मार्च", "तीन january")
     word_pattern = "|".join(re.escape(w) for w in _HINDI_NUM_WORDS.keys())
-    month_pattern = "|".join(re.escape(m) for m in _MONTHS.keys())
+    month_pattern = "|".join(re.escape(mo) for mo in _MONTHS.keys())
     m = re.search(
         rf"({word_pattern})\s*(?:tareekh|tarikh|तारीख|को)?\s*({month_pattern})",
         t,
@@ -120,24 +131,92 @@ def _extract_date(text: str) -> str | None:
         day = _HINDI_NUM_WORDS.get(m.group(1))
         month = _MONTHS.get(m.group(2).lower())
         if day and month:
-            return f"{day:02d}-{month:02d}"
+            ref_m, ref_y = _last_month_ref()
+            year = ref_y if month == ref_m else datetime.now().year
+            return f"{day:02d}-{month:02d}-{year}"
 
     # 3) dd/mm or dd-mm digits
     m = re.search(r"\b(\d{1,2})[/-](\d{1,2})\b", t)
     if m:
         day, month = int(m.group(1)), int(m.group(2))
         if 1 <= day <= 31 and 1 <= month <= 12:
-            return f"{day:02d}-{month:02d}"
+            ref_m, ref_y = _last_month_ref()
+            year = ref_y if month == ref_m else datetime.now().year
+            return f"{day:02d}-{month:02d}-{year}"
+
+    # 4) day-only: Hindi word or digit + "तारीख" (no month) → assume last month
+    #    e.g. "बीस तारीख को", "20 तारीख"
+    m = re.search(rf"(\d{{1,2}}|{word_pattern})\s*(?:ko\s*)?तारीख", t, flags=re.IGNORECASE)
+    if m:
+        raw_day = m.group(1)
+        try:
+            day = int(raw_day)
+        except ValueError:
+            day = _HINDI_NUM_WORDS.get(raw_day)
+        if day and 1 <= day <= 31:
+            ref_m, ref_y = _last_month_ref()
+            return f"{day:02d}-{ref_m:02d}-{ref_y}"
+
+    return None
+
+
+_HINDI_LARGE: dict[str, int] = {
+    "हज़ार": 1000, "हजार": 1000,
+    "सौ": 100,
+    "लाख": 100000,
+}
+
+
+def _parse_hindi_number(word: str) -> int | None:
+    """Parse a single Hindi number word or digit string to int."""
+    if not word:
+        return None
+    w = word.strip()
+    if w.isdigit():
+        return int(w)
+    return _HINDI_NUM_WORDS.get(w)
+
+
+def _extract_amount_hindi_words(text: str) -> str | None:
+    """
+    Parse amounts expressed as Hindi number words, e.g.:
+      "दो हज़ार छब्बीस"  → 2026
+      "पाँच हज़ार"        → 5000
+      "पंद्रह सौ"         → 1500
+      "एक लाख"           → 100000
+    """
+    num_pat = "|".join(re.escape(w) for w in _HINDI_NUM_WORDS.keys())
+    digit_or_word = rf"(?:{num_pat}|\d+)"
+
+    for unit_word, multiplier in _HINDI_LARGE.items():
+        pattern = rf"({digit_or_word})\s*{re.escape(unit_word)}(?:\s+({digit_or_word}))?"
+        m = re.search(pattern, text, flags=re.IGNORECASE)
+        if m:
+            base = _parse_hindi_number(m.group(1))
+            if base is None:
+                continue
+            total = base * multiplier
+            if m.group(2):
+                remainder = _parse_hindi_number(m.group(2))
+                if remainder and remainder < multiplier:
+                    total += remainder
+            if total >= 100:
+                return str(total)
     return None
 
 
 def _extract_amount(text: str) -> str | None:
-    """Look for digit amount near 'रुपये/रुपए/rs/रू'."""
+    """Look for digit amount near 'रुपये/रुपए/rs/रू', then Hindi word amounts."""
     t = text
+    # 1) digits next to currency keyword
     m = re.search(r"(\d{2,7})\s*(?:rupee|rupees|rs\.?|रुपये|रुपए|रू|₹)", t, flags=re.IGNORECASE)
     if m:
         return m.group(1)
-    # Bare digits >= 100 if the word "भुगतान"/"पे"/"भर" is in the message
+    # 2) Hindi word amounts (दो हज़ार, पाँच सौ, etc.)
+    hindi_amt = _extract_amount_hindi_words(t)
+    if hindi_amt:
+        return hindi_amt
+    # 3) Bare digits >= 100 if payment context word present
     if any(k in t for k in ("भुगतान", "पेमेंट", "payment", "भर")):
         m = re.search(r"\b(\d{3,7})\b", t)
         if m:
@@ -267,6 +346,19 @@ def update_slots_from_user(call_id: str, text: str) -> dict[str, Any]:
     if payment and sess.get("loan_taken") is None:
         sess["loan_taken"] = True
         newly["loan_taken"] = True
+
+    # Infer identity_confirmed: if the user confirmed their loan, they must have
+    # already confirmed their identity. Gemma can't call the function tool so we
+    # infer it here.
+    if sess.get("identity_confirmed") is None and sess.get("loan_taken") is True:
+        sess["identity_confirmed"] = "YES"
+        newly["identity_confirmed"] = "YES"
+
+    # Promote disposition to "connected" once identity is confirmed so that
+    # DB persistence writes all survey data.
+    if sess.get("identity_confirmed") == "YES" and sess.get("disposition") != "connected":
+        sess["disposition"] = "connected"
+        newly["disposition"] = "connected"
 
     if newly:
         logger.info("[%s] 🧩 slot updates: %s", call_id, newly)

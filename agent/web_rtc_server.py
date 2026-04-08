@@ -171,6 +171,11 @@ async def my_agent(ctx: agents.JobContext):
         customer_name = db_name or customer_name
         agreement_no = db_agreement
 
+    # Local dev fallback: when running `python agent/web_rtc_server.py console`
+    # there is no room metadata or DB record, so use DEV_CUSTOMER_NAME (default: kashyap)
+    if not customer_name:
+        customer_name = os.getenv("DEV_CUSTOMER_NAME", "kashyap")
+
     # Initialize feedback session
     feedback_sessions[call_id] = _default_feedback_session()
     feedback_sessions[call_id]["agreement_no"] = agreement_no
@@ -217,16 +222,16 @@ async def my_agent(ctx: agents.JobContext):
     # )
 
     # Sarvam TTS: bulbul-v3 model, simran voice
-    # session_tts = sarvam.TTS(
-    #     model="bulbul:v3",
-    #     speaker="simran",
-    #     pace=1.0,
-    #     target_language_code="hi-IN",
-    # )
-    session_tts = MatchTTSPlugin(
-        api_url=os.getenv("CUSTOM_TTS_URL", "http://192.168.30.251:6002/synthesize"),
-        sample_rate=int(os.getenv("CUSTOM_TTS_SAMPLE_RATE", "22050")),
+    session_tts = sarvam.TTS(
+        model="bulbul:v3",
+        speaker="simran",
+        pace=1.0,
+        target_language_code="hi-IN",
     )
+    # session_tts = MatchTTSPlugin(
+    #     api_url=os.getenv("CUSTOM_TTS_URL"),
+    #     sample_rate=int(os.getenv("CUSTOM_TTS_SAMPLE_RATE")),
+    # )
 
     session = AgentSession(
         turn_detection=MultilingualModel(),  # type: ignore[arg-type]

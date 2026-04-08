@@ -99,7 +99,8 @@ def _safe_str(value: Any) -> str | None:
     return text or None
 
 
-_LOCAL_LLM_URL = os.getenv("LOCAL_LLM_URL", "http://192.168.30.239:6000")
+_LOCAL_LLM_URL = os.getenv("LOCAL_LLM_URL", "http://192.168.30.239:9000")
+_LOCAL_LLM_MODEL = os.getenv("LOCAL_LLM_MODEL", "google/gemma-2-9b-it")
 
 
 def _infer_feedback_from_transcript(transcript: str) -> dict[str, Any]:
@@ -166,18 +167,21 @@ Transcript:
 {transcript}
 """.strip()
 
+    # vLLM OpenAI-compatible endpoint — Gemma-2 has no system role support,
+    # so we send a single user message only.
     resp = httpx.post(
-        f"{_LOCAL_LLM_URL}/chat",
+        f"{_LOCAL_LLM_URL}/v1/chat/completions",
         json={
+            "model": _LOCAL_LLM_MODEL,
             "messages": [{"role": "user", "content": prompt}],
-            "max_new_tokens": 512,
+            "max_tokens": 512,
             "temperature": 0.1,
             "stream": False,
         },
         timeout=60.0,
     )
     resp.raise_for_status()
-    raw = (resp.json().get("content") or "").strip()
+    raw = (resp.json()["choices"][0]["message"]["content"] or "").strip()
     # Guard against fenced responses.
     if raw.startswith("```"):
         raw = raw.strip("`")
