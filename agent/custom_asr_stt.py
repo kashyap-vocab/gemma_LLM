@@ -137,6 +137,8 @@ class CustomASRSpeechStream(stt.SpeechStream):
         self._fixed_input_gain = float(os.getenv("ASR_INPUT_GAIN", "1.0"))
         self._target_rms = max(int(os.getenv("ASR_TARGET_RMS", "2200")), 0)
         self._max_agc_gain = max(float(os.getenv("ASR_MAX_GAIN", "12.0")), 1.0)
+        self._noise_gate_rms = max(int(os.getenv("ASR_NOISE_GATE_RMS", "30")), 0)
+        self._agc_min_rms = max(int(os.getenv("ASR_AGC_MIN_RMS", "120")), 0)
         self._log_audio_transform = os.getenv("ASR_LOG_TRANSFORMS", "1") != "0"
         self._limiter_peak = max(int(os.getenv("ASR_LIMITER_PEAK", "28000")), 1)
 
@@ -210,9 +212,15 @@ class CustomASRSpeechStream(stt.SpeechStream):
         in_rms = audioop.rms(audio_bytes, 2)
         in_peak = audioop.max(audio_bytes, 2)
 
+        # Do not amplify comfort noise / near-silence from PSTN packets.
+        if self._noise_gate_rms > 0 and in_rms < self._noise_gate_rms:
+            audio_bytes = b"\x00" * len(audio_bytes)
+            in_rms = 0
+            in_peak = 0
+
         total_gain = max(self._fixed_input_gain, 0.0)
 
-        if self._target_rms > 0 and in_rms > 0:
+        if self._target_rms > 0 and in_rms >= self._agc_min_rms:
             agc_gain = min(self._max_agc_gain, self._target_rms / float(in_rms))
             total_gain *= agc_gain
 

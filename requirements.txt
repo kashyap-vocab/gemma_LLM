@@ -5,7 +5,6 @@ python-dotenv
 httpx
 livekit==1.1.2
 livekit-agents[silero,turn-detector]==1.4.5
-livekit-plugins-deepgram==1.4.5
 livekit-plugins-google==1.4.5
 livekit-plugins-silero==1.4.5
 livekit-plugins-sarvam==1.4.5

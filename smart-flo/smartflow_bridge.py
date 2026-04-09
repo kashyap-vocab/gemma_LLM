@@ -55,6 +55,10 @@ LIVEKIT_URL = os.getenv('LIVEKIT_URL')
 LIVEKIT_API_KEY = os.getenv('LIVEKIT_API_KEY')
 LIVEKIT_API_SECRET = os.getenv('LIVEKIT_API_SECRET')
 SMARTFLO_FROM_NUMBER = os.getenv('SMARTFLO_FROM_NUMBER') or os.getenv('SMARTFLO_PHONE_NUMBER', '')
+SMARTFLO_INPUT_GAIN = float(os.getenv('SMARTFLO_INPUT_GAIN', '1.0'))
+SMARTFLO_AUDIO_STATS_EVERY = max(int(os.getenv('SMARTFLO_AUDIO_STATS_EVERY', '0')), 0)
+SMARTFLO_LIVEKIT_SAMPLE_RATE = int(os.getenv('SMARTFLO_LIVEKIT_SAMPLE_RATE', '16000'))
+SMARTFLO_PSTN_SAMPLE_RATE = int(os.getenv('SMARTFLO_PSTN_SAMPLE_RATE', '8000'))
 
 
 def normalize_phone(number: str) -> str:
@@ -86,6 +90,10 @@ class SmartfloLiveKitBridge:
         # echoes that same mark name back (= audio has actually played out).
         self._pending_mark: str | None = None
         self._mark_echo: asyncio.Event | None = None
+        self._in_resample_state = None
+        self._out_resample_state = None
+        self._audio_in_counter = 0
+        self._audio_out_counter = 0
 
     @staticmethod
     def _resolve_customer_phone(from_number: str = None, to_number: str = None) -> str:
@@ -130,7 +138,7 @@ class SmartfloLiveKitBridge:
                 pass
 
         await self.room.connect(LIVEKIT_URL, token.to_jwt())
-        self.audio_source = rtc.AudioSource(8000, 1)
+        self.audio_source = rtc.AudioSource(SMARTFLO_LIVEKIT_SAMPLE_RATE, 1)
         self.audio_track = rtc.LocalAudioTrack.create_audio_track("smartflo-audio", self.audio_source)
         options = rtc.TrackPublishOptions()
         options.source = rtc.TrackSource.SOURCE_MICROPHONE
@@ -176,11 +184,32 @@ class SmartfloLiveKitBridge:
         self._closed.set()
 
     async def forward_livekit_to_smartflo(self, track: rtc.AudioTrack):
-        audio_stream = rtc.AudioStream(track, sample_rate=8000, num_channels=1, frame_size_ms=20)
+        audio_stream = rtc.AudioStream(
+            track,
+            sample_rate=SMARTFLO_LIVEKIT_SAMPLE_RATE,
+            num_channels=1,
+            frame_size_ms=20,
+        )
         async for event in audio_stream:
             if self._closed.is_set(): break
             pcm = event.frame.data.tobytes()
+            if SMARTFLO_LIVEKIT_SAMPLE_RATE != SMARTFLO_PSTN_SAMPLE_RATE:
+                pcm, self._out_resample_state = audioop.ratecv(
+                    pcm,
+                    2,
+                    1,
+                    SMARTFLO_LIVEKIT_SAMPLE_RATE,
+                    SMARTFLO_PSTN_SAMPLE_RATE,
+                    self._out_resample_state,
+                )
             mulaw = audioop.lin2ulaw(pcm, 2)
+            self._audio_out_counter += 1
+            if SMARTFLO_AUDIO_STATS_EVERY and self._audio_out_counter % SMARTFLO_AUDIO_STATS_EVERY == 0:
+                print(
+                    f"[BRIDGE] 🔊 LK→PSTN frame={self._audio_out_counter} "
+                    f"sr={SMARTFLO_LIVEKIT_SAMPLE_RATE}->{SMARTFLO_PSTN_SAMPLE_RATE} "
+                    f"rms={audioop.rms(pcm, 2)} peak={audioop.max(pcm, 2)}"
+                )
             try:
                 await self.ws.send_json({
                     "event": "media",
@@ -195,7 +224,28 @@ class SmartfloLiveKitBridge:
         try:
             mulaw_data = base64.b64decode(audio_payload)
             pcm_data = audioop.ulaw2lin(mulaw_data, 2)
-            frame = rtc.AudioFrame(data=pcm_data, sample_rate=8000, num_channels=1,
+            if SMARTFLO_PSTN_SAMPLE_RATE != SMARTFLO_LIVEKIT_SAMPLE_RATE:
+                pcm_data, self._in_resample_state = audioop.ratecv(
+                    pcm_data,
+                    2,
+                    1,
+                    SMARTFLO_PSTN_SAMPLE_RATE,
+                    SMARTFLO_LIVEKIT_SAMPLE_RATE,
+                    self._in_resample_state,
+                )
+            if SMARTFLO_INPUT_GAIN > 0 and abs(SMARTFLO_INPUT_GAIN - 1.0) > 1e-3:
+                pcm_data = audioop.mul(pcm_data, 2, SMARTFLO_INPUT_GAIN)
+
+            self._audio_in_counter += 1
+            if SMARTFLO_AUDIO_STATS_EVERY and self._audio_in_counter % SMARTFLO_AUDIO_STATS_EVERY == 0:
+                print(
+                    f"[BRIDGE] 🎤 PSTN→LK frame={self._audio_in_counter} "
+                    f"sr={SMARTFLO_PSTN_SAMPLE_RATE}->{SMARTFLO_LIVEKIT_SAMPLE_RATE} "
+                    f"gain={SMARTFLO_INPUT_GAIN:.2f} rms={audioop.rms(pcm_data, 2)} "
+                    f"peak={audioop.max(pcm_data, 2)}"
+                )
+
+            frame = rtc.AudioFrame(data=pcm_data, sample_rate=SMARTFLO_LIVEKIT_SAMPLE_RATE, num_channels=1,
                                    samples_per_channel=len(pcm_data) // 2)
             await self.audio_source.capture_frame(frame)
         except Exception as e:

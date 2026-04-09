@@ -31,44 +31,29 @@ def _merge_system_into_user(messages: list[dict]) -> list[dict]:
       - Must strictly alternate: user, assistant, user, assistant, ...
       - Must start with 'user'.
 
-    Strategy:
-      1. Fold every system message into the next user message's content
-         (prepend, separated by blank line).  Trailing system content that
-         has no following user turn is appended to the last user turn found,
-         or added as a new user turn of last resort.
-      2. Merge any consecutive same-role messages (can appear after step 1
-         e.g. two user turns in a row).
-      3. If the sequence still starts with 'assistant' (agent sent the
-         greeting before the customer spoke), insert a minimal placeholder
-         user turn so the template is satisfied.
+     Strategy:
+        1. Remove all system turns from the running chat turns and collect
+            their content as one instruction block.
+        2. Merge consecutive same-role turns.
+        3. Ensure the sequence starts with user.
+        4. Prepend the collected system instruction block to the FIRST user
+            turn only, so dynamic context never pollutes the latest user utterance.
     """
-    # ── Step 1: fold system messages into the next user turn ─────────────
+    # ── Step 1: strip system turns and collect them separately ───────────
     out: list[dict] = []
-    pending_system: list[str] = []
+    system_chunks: list[str] = []
 
     for msg in messages:
         role = msg["role"]  # may be str or StrEnum — == comparisons work either way
         content = str(msg.get("content") or "")
 
         if role == "system":
-            pending_system.append(content)
+            if content:
+                system_chunks.append(content)
         elif role == "user":
-            if pending_system:
-                content = "\n\n".join(pending_system) + "\n\n" + content
-                pending_system = []
             out.append({"role": "user", "content": content})
         else:  # assistant / model
             out.append({"role": "assistant", "content": content})
-
-    # Flush any trailing system content into the last user turn (or new turn)
-    if pending_system:
-        system_text = "\n\n".join(pending_system)
-        for i in reversed(range(len(out))):
-            if out[i]["role"] == "user":
-                out[i] = {"role": "user", "content": out[i]["content"] + "\n\n" + system_text}
-                break
-        else:
-            out.append({"role": "user", "content": system_text})
 
     # ── Step 2: merge consecutive same-role messages ──────────────────────
     merged: list[dict] = []
@@ -82,6 +67,20 @@ def _merge_system_into_user(messages: list[dict]) -> list[dict]:
     # ── Step 3: ensure conversation starts with 'user' ────────────────────
     if merged and merged[0]["role"] != "user":
         merged.insert(0, {"role": "user", "content": "[call started]"})
+
+    # ── Step 4: prepend system instruction block to first user turn ───────
+    if system_chunks:
+        system_text = "\n\n".join(system_chunks).strip()
+        if system_text:
+            for i, msg in enumerate(merged):
+                if msg["role"] == "user":
+                    merged[i] = {
+                        "role": "user",
+                        "content": f"{system_text}\n\n{msg['content']}" if msg["content"] else system_text,
+                    }
+                    break
+            else:
+                merged.insert(0, {"role": "user", "content": system_text})
 
     return merged
 

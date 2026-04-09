@@ -78,6 +78,20 @@ def _coerce_payment_date(value: Any) -> Optional[date]:
     return None
 
 
+def _coerce_bool(value: Any) -> Optional[bool]:
+    """Normalize booleans from mixed agent/session payloads."""
+    if value is None or value == "":
+        return None
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    if text in ("yes", "y", "true", "1", "haan", "ha", "h", "हाँ", "हां"):
+        return True
+    if text in ("no", "n", "false", "0", "nah", "नहीं", "ना"):
+        return False
+    return None
+
+
 # ── Call metadata lookup ──────────────────────────────────────────────────────
 
 def _load_call_metadata(
@@ -256,7 +270,7 @@ def _persist_feedback_to_db_sync(call_id: str, agreement_no: Optional[str] = Non
             identity_val = str(data.get("identity_confirmed") or "").upper()
             feedback.identity_confirmed = identity_val == "YES"
             feedback.loan_taken = data.get("loan_taken") is True
-            feedback.last_month_payment = data.get("last_month_payment")
+            feedback.last_month_payment = _coerce_bool(data.get("last_month_payment"))
 
             # Payment details
             feedback.payee = payment.get("payee") or data.get("payee")

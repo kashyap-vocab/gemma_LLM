@@ -17,7 +17,7 @@ if str(_project_root) not in sys.path:
 # handlers (text + JSON) for each worker process. Calling basicConfig adds an extra text handler
 # that causes every log line to appear twice.
 for _noisy in ("livekit", "livekit.rtc", "livekit.agents", "livekit.plugins.sarvam", "livekit.plugins.sarvam.log",
-               "livekit.plugins.elevenlabs","livekit.plugins.deepgram", "livekit.plugins.google", "livekit.plugins.silero",
+               "livekit.plugins.elevenlabs", "livekit.plugins.google", "livekit.plugins.silero",
                "livekit.plugins.turn_detector", "livekit.plugins.noise_cancellation", "httpx", "httpcore",
                "google_genai", "google.genai", "grpc",):
     logging.getLogger(_noisy).setLevel(logging.WARNING)
@@ -37,7 +37,7 @@ from livekit.agents import (
     UserInputTranscribedEvent,
     room_io,
 )
-from livekit.plugins import deepgram, noise_cancellation, silero, sarvam
+from livekit.plugins import noise_cancellation, silero,deepgram
 from agent.custom_asr_stt import CustomASRSTT
 
 from agent.metrics import MetricsTracker
@@ -66,14 +66,23 @@ def _sanitize_assistant_text(text: str) -> str:
 
 def prewarm(proc: agents.JobProcess):
     print("🔥 PREWARMING MODELS...")
+
+
     proc.userdata["vad"] = silero.VAD.load()
     proc.userdata["stt"] = deepgram.STT(model="nova-3", language="hi")
-
+    # proc.userdata["vad"] = silero.VAD.load(
+    #     min_speech_duration=float(os.getenv("VAD_MIN_SPEECH_DURATION", "0.01")),
+    #     min_silence_duration=float(os.getenv("VAD_MIN_SILENCE_DURATION", "0.50")),
+    #     activation_threshold=float(os.getenv("VAD_ACTIVATION_THRESHOLD", "0.10")),
+    #     deactivation_threshold=float(os.getenv("VAD_DEACTIVATION_THRESHOLD", "0.05")),
+    # )
     # proc.userdata["stt"] = CustomASRSTT(
     # base_url=os.getenv("ASR_API_URL"),
     # language="hi-IN",
     # sample_rate=int(os.getenv("ASR_SAMPLE_RATE", "16000")),
-    # chunk_size=int(os.getenv("ASR_CHUNK_SIZE", "320")))
+    # chunk_size=int(os.getenv("ASR_CHUNK_SIZE", "640")))
+
+
 
     proc.userdata["llm"] = LocalGemmaLLM(temperature=0.1)
     # MultilingualModel is NOT pre-warmed here — its __init__ calls
@@ -221,22 +230,15 @@ async def my_agent(ctx: agents.JobContext):
     #     voice_id="XswejgPhV7IAyZmwhk56"
     # )
 
-    # Sarvam TTS: bulbul-v3 model, simran voice
-    session_tts = sarvam.TTS(
-        model="bulbul:v3",
-        speaker="simran",
-        pace=1.0,
-        target_language_code="hi-IN",
+    session_tts = MatchTTSPlugin(
+        api_url=os.getenv("CUSTOM_TTS_URL", "http://35.207.228.86:7000/synthesize"),
+        sample_rate=int(os.getenv("CUSTOM_TTS_SAMPLE_RATE", "22050")),
     )
-    # session_tts = MatchTTSPlugin(
-    #     api_url=os.getenv("CUSTOM_TTS_URL"),
-    #     sample_rate=int(os.getenv("CUSTOM_TTS_SAMPLE_RATE")),
-    # )
 
     session = AgentSession(
         turn_detection=MultilingualModel(),  # type: ignore[arg-type]
-        min_endpointing_delay=0.1,
-        max_endpointing_delay=0.4,
+        min_endpointing_delay=float(os.getenv("MIN_ENDPOINTING_DELAY", "0.60")),
+        max_endpointing_delay=float(os.getenv("MAX_ENDPOINTING_DELAY", "1.80")),
         stt=ctx.proc.userdata["stt"],
         llm=ctx.proc.userdata["llm"],
         tts=session_tts,

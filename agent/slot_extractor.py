@@ -263,13 +263,13 @@ def _extract_loan_taken(text: str) -> bool | None:
     return None
 
 
-def _extract_last_month_payment(text: str) -> str | None:
+def _extract_last_month_payment(text: str) -> bool | None:
     t = _norm(text)
     if "पिछले महीने" in text or "last month" in t or "पिछला महीना" in text:
         if any(n in text for n in _NEGATE):
-            return "no"
+            return False
         if any(a in text for a in _AFFIRM):
-            return "yes"
+            return True
     # If they explicitly mentioned a payment date or amount, treat last-month
     # payment as confirmed implicitly.
     return None
@@ -339,8 +339,8 @@ def update_slots_from_user(call_id: str, text: str) -> dict[str, Any]:
     # Implicit confirmations: if we now have a date or amount, treat
     # last_month_payment as confirmed (the customer just told us about it).
     if (payment.get("date") or payment.get("amount")) and sess.get("last_month_payment") is None:
-        sess["last_month_payment"] = "yes"
-        newly["last_month_payment"] = "yes"
+        sess["last_month_payment"] = True
+        newly["last_month_payment"] = True
 
     # Implicit confirmation: any payment detail implies a loan exists.
     if payment and sess.get("loan_taken") is None:
