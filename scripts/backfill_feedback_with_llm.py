@@ -24,6 +24,9 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+# Load .env before anything that reads os.getenv at module level.
+load_dotenv()
+
 from db.database import SessionLocal
 from db.models import Conversation, CustomerFeedback
 
@@ -99,8 +102,8 @@ def _safe_str(value: Any) -> str | None:
     return text or None
 
 
-_LOCAL_LLM_URL = os.getenv("LOCAL_LLM_URL", "http://192.168.30.239:9000")
-_LOCAL_LLM_MODEL = os.getenv("LOCAL_LLM_MODEL", "google/gemma-2-9b-it")
+_LOCAL_LLM_URL = os.getenv("LOCAL_LLM_URL")
+_LOCAL_LLM_MODEL = os.getenv("LOCAL_LLM_MODEL")
 
 
 def _infer_feedback_from_transcript(transcript: str) -> dict[str, Any]:
@@ -174,7 +177,7 @@ Transcript:
         json={
             "model": _LOCAL_LLM_MODEL,
             "messages": [{"role": "user", "content": prompt}],
-            "max_tokens": 512,
+            # "max_tokens": 512,
             "temperature": 0.1,
             "stream": False,
         },
@@ -229,8 +232,6 @@ def _pick_latest_turn_set(db, agreement_no: str) -> tuple[str | None, list[Conve
 
 def run_backfill_once() -> dict[str, int]:
     """Run one LLM backfill pass and return counters."""
-    load_dotenv()
-
     inserted = 0
     updated = 0
     skipped = 0

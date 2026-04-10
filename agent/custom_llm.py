@@ -13,10 +13,13 @@ import os
 import re
 
 import httpx
+from dotenv import load_dotenv
 from livekit.agents import llm
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN
 
-LOCAL_LLM_URL = os.getenv("LOCAL_LLM_URL", "http://192.168.30.239:9000")
+load_dotenv()
+
+LOCAL_LLM_URL = os.getenv("LOCAL_LLM_URL")
 LOCAL_LLM_MODEL = os.getenv("LOCAL_LLM_MODEL", "google/gemma-2-9b-it")
 
 logger = logging.getLogger("local-gemma-llm")

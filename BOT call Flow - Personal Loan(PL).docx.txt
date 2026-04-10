@@ -1,0 +1,61 @@
+﻿Call Opening:  
+Good morning/Afternoon/Evening I am  calling on behalf of L&T Finance. Am I speaking with Mr. /Ms._________ (Customer Name from file)
+Customer- Yes –( Continue with “Purpose of the call” Point 2)
+Customer- No – (Continue with “Right party verification & availability” Point 1)
+1.  Bot to Confirm Mr. /Ms._________ (Customer Name) availability and proceed for call closure - Make a note of the time on which we can connect or capture alternate number if provided by customer.
+ Closing - Thank you for your time, you have a good day!
+Point 2
+When customer response is yes
+
+
+Bot - This is a survey call and we would like to note your feedback regarding the experience with L&T Finance of your personal  loan.
+Customer - will respond
+
+
+Bot - We would like to ask a few questions so that we can understand and note down your feedback
+Customer – will respond
+
+
+Bot - Did you take the loan from L&T Finance?
+1st condition Customer – Yes ( we will proceed next question)
+2nd condition Customer – No ( we will end the call with this script “Thank you for giving your time. Have a great day.)
+
+
+Bot - Did you make the payment in the last month?
+Customer – If yes , proceed with the call   
+Customer – If No( and if payment is reflecting in the file then it will be a Non Compliance and end the call “Thank you for your valuable feedback and for giving your time. Have a great day.”
+
+
+Bot - Who made the payment for this account ( options with QA – Customer Self, Family Member , Customer’s Friend or 3rd party)
+Customer – Customer Self ( proceed with next question)
+Customer – respond with Family Member/Customer’s friend or 3rd party ( ask and capture Payee name and contact number) and proceed with next question.
+
+
+Bot - When did you make your last payment? (capture date)
+Customer – will respond with date ( if customer is confirming 2 dates then ask for confirm date and proceed. ( if he is not able to confirm dates on multiple request then proceed with next question)
+
+
+Bot - By which mode was the payment made ( Options – Online/UPI/NEFT/RTGS in LAN, Online/UPI to Field Executive, Cash, Branch, Outlet, NACH{auto debit from account))
+Customer - Online/UPI/NEFT/RTGS in LAN (move to next question
+Customer – UPI/cash to Field executive ( capture Field executive name and Contact number) this is Non Compliance 
+Customer -Cash ( this is Non Compliance )
+Customer – Branch/Outlet, NACH{auto debit from account)) – proceed with next question
+
+
+Bot - What was the reason for the payment? ( EMI, EMI+Charges, Settlement, foreclosure, Charges, Loan cancellation, Advance EMI)
+Customer – will respond, capture and proceed.
+
+
+Bot - What was the actual amount paid?
+Customer – will respond and capture the amount.
+
+
+
+
+Closing – 
+
+
+Bot - Thank you for your valuable feedback and for giving your time. Have a great day.
+
+
+Note – if date and time are not matching with the information that we had for customer ( in excel) it will also be considered as Non Compliance

@@ -69,18 +69,18 @@ def prewarm(proc: agents.JobProcess):
 
 
     proc.userdata["vad"] = silero.VAD.load()
-    proc.userdata["stt"] = deepgram.STT(model="nova-3", language="hi")
-    # proc.userdata["vad"] = silero.VAD.load(
-    #     min_speech_duration=float(os.getenv("VAD_MIN_SPEECH_DURATION", "0.01")),
-    #     min_silence_duration=float(os.getenv("VAD_MIN_SILENCE_DURATION", "0.50")),
-    #     activation_threshold=float(os.getenv("VAD_ACTIVATION_THRESHOLD", "0.10")),
-    #     deactivation_threshold=float(os.getenv("VAD_DEACTIVATION_THRESHOLD", "0.05")),
-    # )
-    # proc.userdata["stt"] = CustomASRSTT(
-    # base_url=os.getenv("ASR_API_URL"),
-    # language="hi-IN",
-    # sample_rate=int(os.getenv("ASR_SAMPLE_RATE", "16000")),
-    # chunk_size=int(os.getenv("ASR_CHUNK_SIZE", "640")))
+    # proc.userdata["stt"] = deepgram.STT(model="nova-3", language="hi")
+    proc.userdata["vad"] = silero.VAD.load(
+        min_speech_duration=float(os.getenv("VAD_MIN_SPEECH_DURATION", "0.01")),
+        min_silence_duration=float(os.getenv("VAD_MIN_SILENCE_DURATION", "0.50")),
+        activation_threshold=float(os.getenv("VAD_ACTIVATION_THRESHOLD", "0.10")),
+        deactivation_threshold=float(os.getenv("VAD_DEACTIVATION_THRESHOLD", "0.05")),
+    )
+    proc.userdata["stt"] = CustomASRSTT(
+    base_url=os.getenv("ASR_API_URL"),
+    language="hi-IN",
+    sample_rate=int(os.getenv("ASR_SAMPLE_RATE", "16000")),
+    chunk_size=int(os.getenv("ASR_CHUNK_SIZE", "640")))
 
 
 
@@ -231,8 +231,8 @@ async def my_agent(ctx: agents.JobContext):
     # )
 
     session_tts = MatchTTSPlugin(
-        api_url=os.getenv("CUSTOM_TTS_URL", "http://35.207.228.86:7000/synthesize"),
-        sample_rate=int(os.getenv("CUSTOM_TTS_SAMPLE_RATE", "22050")),
+        api_url=os.getenv("CUSTOM_TTS_URL"),
+        sample_rate=int(os.getenv("CUSTOM_TTS_SAMPLE_RATE")),
     )
 
     session = AgentSession(
@@ -503,7 +503,7 @@ server = agents.WorkerOptions(
     agent_name="LTFS_SurveyAgent-Soma",
     entrypoint_fnc=my_agent,
     prewarm_fnc=prewarm,
-    num_idle_processes=5,
+    num_idle_processes=1,
     # ROOM type ensures the agent is optimized for the Jobs API flow
 )
 

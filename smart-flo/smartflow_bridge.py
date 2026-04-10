@@ -206,9 +206,9 @@ class SmartfloLiveKitBridge:
             self._audio_out_counter += 1
             if SMARTFLO_AUDIO_STATS_EVERY and self._audio_out_counter % SMARTFLO_AUDIO_STATS_EVERY == 0:
                 print(
-                    f"[BRIDGE] 🔊 LK→PSTN frame={self._audio_out_counter} "
-                    f"sr={SMARTFLO_LIVEKIT_SAMPLE_RATE}->{SMARTFLO_PSTN_SAMPLE_RATE} "
-                    f"rms={audioop.rms(pcm, 2)} peak={audioop.max(pcm, 2)}"
+                    # f"[BRIDGE] 🔊 LK→PSTN frame={self._audio_out_counter} "
+                    # f"sr={SMARTFLO_LIVEKIT_SAMPLE_RATE}->{SMARTFLO_PSTN_SAMPLE_RATE} "
+                    # f"rms={audioop.rms(pcm, 2)} peak={audioop.max(pcm, 2)}"
                 )
             try:
                 await self.ws.send_json({
@@ -239,10 +239,10 @@ class SmartfloLiveKitBridge:
             self._audio_in_counter += 1
             if SMARTFLO_AUDIO_STATS_EVERY and self._audio_in_counter % SMARTFLO_AUDIO_STATS_EVERY == 0:
                 print(
-                    f"[BRIDGE] 🎤 PSTN→LK frame={self._audio_in_counter} "
-                    f"sr={SMARTFLO_PSTN_SAMPLE_RATE}->{SMARTFLO_LIVEKIT_SAMPLE_RATE} "
-                    f"gain={SMARTFLO_INPUT_GAIN:.2f} rms={audioop.rms(pcm_data, 2)} "
-                    f"peak={audioop.max(pcm_data, 2)}"
+                    # # f"[BRIDGE] 🎤 PSTN→LK frame={self._audio_in_counter} "
+                    # f"sr={SMARTFLO_PSTN_SAMPLE_RATE}->{SMARTFLO_LIVEKIT_SAMPLE_RATE} "
+                    # f"gain={SMARTFLO_INPUT_GAIN:.2f} rms={audioop.rms(pcm_data, 2)} "
+                    # f"peak={audioop.max(pcm_data, 2)}"
                 )
 
             frame = rtc.AudioFrame(data=pcm_data, sample_rate=SMARTFLO_LIVEKIT_SAMPLE_RATE, num_channels=1,
