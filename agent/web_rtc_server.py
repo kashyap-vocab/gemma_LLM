@@ -69,18 +69,18 @@ def prewarm(proc: agents.JobProcess):
 
 
     proc.userdata["vad"] = silero.VAD.load()
-    # proc.userdata["stt"] = deepgram.STT(model="nova-3", language="hi")
-    proc.userdata["vad"] = silero.VAD.load(
-        min_speech_duration=float(os.getenv("VAD_MIN_SPEECH_DURATION", "0.01")),
-        min_silence_duration=float(os.getenv("VAD_MIN_SILENCE_DURATION", "0.50")),
-        activation_threshold=float(os.getenv("VAD_ACTIVATION_THRESHOLD", "0.10")),
-        deactivation_threshold=float(os.getenv("VAD_DEACTIVATION_THRESHOLD", "0.05")),
-    )
-    proc.userdata["stt"] = CustomASRSTT(
-    base_url=os.getenv("ASR_API_URL"),
-    language="hi-IN",
-    sample_rate=int(os.getenv("ASR_SAMPLE_RATE", "16000")),
-    chunk_size=int(os.getenv("ASR_CHUNK_SIZE", "640")))
+    proc.userdata["stt"] = deepgram.STT(model="nova-3", language="hi")
+    # proc.userdata["vad"] = silero.VAD.load(
+    #     min_speech_duration=float(os.getenv("VAD_MIN_SPEECH_DURATION", "0.01")),
+    #     min_silence_duration=float(os.getenv("VAD_MIN_SILENCE_DURATION", "0.50")),
+    #     activation_threshold=float(os.getenv("VAD_ACTIVATION_THRESHOLD", "0.10")),
+    #     deactivation_threshold=float(os.getenv("VAD_DEACTIVATION_THRESHOLD", "0.05")),
+    # )
+    # proc.userdata["stt"] = CustomASRSTT(
+    # base_url=os.getenv("ASR_API_URL"),
+    # language="hi-IN",
+    # sample_rate=int(os.getenv("ASR_SAMPLE_RATE", "16000")),
+    # chunk_size=int(os.getenv("ASR_CHUNK_SIZE", "640")))
 
 
 
@@ -393,7 +393,7 @@ async def my_agent(ctx: agents.JobContext):
             # TTS frame into the bridge). Safety cap so a stuck TTS can
             # never wedge the call open.
             try:
-                await asyncio.wait_for(closing_tts_done.wait(), timeout=20.0)
+                await asyncio.wait_for(closing_tts_done.wait(), timeout=30.0)
             except asyncio.TimeoutError:
                 logger.warning(
                     f"[{call_id}] Timed out waiting for closing TTS to finish; "
