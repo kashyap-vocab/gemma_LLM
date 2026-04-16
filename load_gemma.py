@@ -67,7 +67,7 @@ if __name__ == "__main__":
 
 
     # proc.userdata["llm"] = openai.LLM(
-    #     model="gopogle/gemma-2-9b-it",
+    #     model="google/gemma-2-9b-it",
     #     api_key=os.environ.get("gemma_api", "dummy"),
     #     base_url=os.environ.get("gemma_api", "http://192.168.30.239:8000/v1"),
     #     temperature=0.1,
