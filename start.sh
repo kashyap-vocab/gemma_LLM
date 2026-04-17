@@ -74,7 +74,7 @@ echo -e "Agent PID: ${AGENT_PID}"
 sleep 3
 
 # ---- Step 4: Start API Server (serves frontend + API + WebSocket bridge) ----
-echo -e "\n${GREEN}[4/4] Starting API Server on port 8000 (5 workers)...${NC}"
+echo -e "\n${GREEN}[4/4] Starting API Server on port 8000 ${NC}"
 cd "$PROJECT_ROOT"
 python api/main.py &
 API_PID=$!

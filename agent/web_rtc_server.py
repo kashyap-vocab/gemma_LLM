@@ -5,12 +5,14 @@ import re
 import sys
 from pathlib import Path
 
-from livekit.plugins.turn_detector.multilingual import MultilingualModel
-
-# Ensure project root is on sys.path
+# Ensure project root is on sys.path BEFORE any local package imports
 _project_root = Path(__file__).parent.parent
 if str(_project_root) not in sys.path:
     sys.path.insert(0, str(_project_root))
+
+from agent.custom_tts import MatchTTSPlugin
+
+from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
 # Keep low-level library loggers quiet; show agent-level logs
 # Note: do NOT call logging.basicConfig() here — the LiveKit agents framework sets up its own
@@ -26,7 +28,6 @@ logger = logging.getLogger(__name__)
 
 from dotenv import load_dotenv
 from google import genai
-from google.genai import types
 from livekit import agents, rtc
 from livekit.agents import (
     AgentSession,
@@ -35,7 +36,8 @@ from livekit.agents import (
     UserInputTranscribedEvent,
     room_io,
 )
-from livekit.plugins import deepgram, google, noise_cancellation, silero, sarvam
+from livekit.plugins import deepgram, noise_cancellation, silero, sarvam
+from agent.custom_llm import LocalVLLM
 
 from agent.metrics import MetricsTracker
 from agent.survey_agent import SurveyAssistant
@@ -65,10 +67,10 @@ def prewarm(proc: agents.JobProcess):
     print("🔥 PREWARMING MODELS...")
     proc.userdata["vad"] = silero.VAD.load()
     proc.userdata["stt"] = deepgram.STT(model="nova-3", language="hi")
-    proc.userdata["llm"] = google.LLM(
-        model="gemini-2.0-flash",
+    proc.userdata["llm"] = LocalVLLM(
+        base_url=os.getenv("LOCAL_LLM_URL"),
+        model=os.getenv("LOCAL_LLM_MODEL"),
         temperature=0.1,
-        thinking_config=types.ThinkingConfig(include_thoughts=False),
     )
     # MultilingualModel is NOT pre-warmed here — its __init__ calls
     # get_job_context().inference_executor which is unavailable outside a job.
@@ -193,12 +195,17 @@ async def my_agent(ctx: agents.JobContext):
     # )
 
     # Sarvam TTS: bulbul-v3 model, simran voice
-    session_tts = sarvam.TTS(
-        model="bulbul:v3",
-        speaker="simran",
-        pace=1.0,
-        target_language_code="hi-IN",
+    # session_tts = sarvam.TTS(
+    #     model="bulbul:v3",
+    #     speaker="simran",
+    #     pace=1.0,
+    #     target_language_code="hi-IN",
+    # )
+    session_tts = MatchTTSPlugin(
+        api_url=os.getenv("CUSTOM_TTS_URL"),
+        sample_rate=int(os.getenv("CUSTOM_TTS_SAMPLE_RATE")),
     )
+
     session = AgentSession(
         turn_detection=MultilingualModel(),  # type: ignore[arg-type]
         min_endpointing_delay=0.1,
@@ -416,7 +423,7 @@ server = agents.WorkerOptions(
     agent_name="LTFS_SurveyAgent-Soma",
     entrypoint_fnc=my_agent,
     prewarm_fnc=prewarm,
-    num_idle_processes=5,
+    num_idle_processes=1,
     # ROOM type ensures the agent is optimized for the Jobs API flow
 )
 
