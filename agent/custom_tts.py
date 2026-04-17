@@ -206,7 +206,7 @@ class _MatchTTSChunkedStream(tts.ChunkedStream):
         total_time = time.time() - start
 
         print(
-            f"🎙️ [MATCH STREAM] Text='{self._input_text[:40]}...' -> "
+            f"🎙️ [MATCH STREAM] Text='{self._input_text}...' -> "
             f"API:{api_time:.3f}s Total:{total_time:.3f}s "
             f"({len(audio_bytes)} bytes)"
         )

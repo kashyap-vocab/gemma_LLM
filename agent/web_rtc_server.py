@@ -5,12 +5,14 @@ import re
 import sys
 from pathlib import Path
 
-from livekit.plugins.turn_detector.multilingual import MultilingualModel
-
-# Ensure project root is on sys.path
+# Ensure project root is on sys.path BEFORE any local package imports
 _project_root = Path(__file__).parent.parent
 if str(_project_root) not in sys.path:
     sys.path.insert(0, str(_project_root))
+
+from agent.custom_tts import MatchTTSPlugin
+
+from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
 # Keep low-level library loggers quiet; show agent-level logs
 # Note: do NOT call logging.basicConfig() here — the LiveKit agents framework sets up its own
@@ -29,6 +31,7 @@ from agent.custom_llm import LocalGemmaLLM, LOCAL_LLM_URL as _LOCAL_LLM_URL, LOC
 from agent.custom_tts import MatchTTSPlugin
 
 from dotenv import load_dotenv
+from google import genai
 from livekit import agents, rtc
 from livekit.agents import (
     AgentSession,
@@ -37,8 +40,8 @@ from livekit.agents import (
     UserInputTranscribedEvent,
     room_io,
 )
-from livekit.plugins import noise_cancellation, silero,deepgram
-from agent.custom_asr_stt import CustomASRSTT
+from livekit.plugins import deepgram, noise_cancellation, silero, sarvam
+from agent.custom_llm import LocalVLLM
 
 from agent.metrics import MetricsTracker
 from agent.survey_agent import SurveyAssistant
@@ -70,21 +73,11 @@ def prewarm(proc: agents.JobProcess):
 
     proc.userdata["vad"] = silero.VAD.load()
     proc.userdata["stt"] = deepgram.STT(model="nova-3", language="hi")
-    # proc.userdata["vad"] = silero.VAD.load(
-    #     min_speech_duration=float(os.getenv("VAD_MIN_SPEECH_DURATION", "0.01")),
-    #     min_silence_duration=float(os.getenv("VAD_MIN_SILENCE_DURATION", "0.50")),
-    #     activation_threshold=float(os.getenv("VAD_ACTIVATION_THRESHOLD", "0.10")),
-    #     deactivation_threshold=float(os.getenv("VAD_DEACTIVATION_THRESHOLD", "0.05")),
-    # )
-    # proc.userdata["stt"] = CustomASRSTT(
-    # base_url=os.getenv("ASR_API_URL"),
-    # language="hi-IN",
-    # sample_rate=int(os.getenv("ASR_SAMPLE_RATE", "16000")),
-    # chunk_size=int(os.getenv("ASR_CHUNK_SIZE", "640")))
-
-
-
-    proc.userdata["llm"] = LocalGemmaLLM(temperature=0.1)
+    proc.userdata["llm"] = LocalVLLM(
+        base_url=os.getenv("LOCAL_LLM_URL"),
+        model=os.getenv("LOCAL_LLM_MODEL"),
+        temperature=0.1,
+    )
     # MultilingualModel is NOT pre-warmed here — its __init__ calls
     # get_job_context().inference_executor which is unavailable outside a job.
     # It is instantiated per-session inside my_agent() instead.
@@ -230,6 +223,13 @@ async def my_agent(ctx: agents.JobContext):
     #     voice_id="XswejgPhV7IAyZmwhk56"
     # )
 
+    # Sarvam TTS: bulbul-v3 model, simran voice
+    # session_tts = sarvam.TTS(
+    #     model="bulbul:v3",
+    #     speaker="simran",
+    #     pace=1.0,
+    #     target_language_code="hi-IN",
+    # )
     session_tts = MatchTTSPlugin(
         api_url=os.getenv("CUSTOM_TTS_URL"),
         sample_rate=int(os.getenv("CUSTOM_TTS_SAMPLE_RATE")),

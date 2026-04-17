@@ -1,303 +1,215 @@
 """
-Local Gemma-2 LLM plugin for LiveKit Agents.
+Custom LLM plugin for LiveKit agents — Gemma 2 via vLLM.
 
-Wraps the HTTP API exposed by the local Gemma-2 server
-(POST /chat  →  {"role": "assistant", "content": "..."}).
+Uses /v1/completions (raw text) instead of /v1/chat/completions so that we
+build the Gemma 2 native prompt ourselves. This avoids all of vLLM's chat-
+template constraints:
+  - No 'system role not supported' error
+  - No 'roles must alternate' error
+  - No 'tool_choice auto requires flags' error
+
+Gemma 2 prompt format
+---------------------
+<bos><start_of_turn>user
+{content}<end_of_turn>
+<start_of_turn>model
+{content}<end_of_turn>
+<start_of_turn>user
+...
+<start_of_turn>model   ← the open model turn we want the model to complete
 """
 
 from __future__ import annotations
 
 import json
+import uuid
 import logging
-import os
-import re
+from typing import Any
 
-import httpx
-from dotenv import load_dotenv
+import aiohttp
 from livekit.agents import llm
-from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN
-
-load_dotenv()
-
-LOCAL_LLM_URL = os.getenv("LOCAL_LLM_URL")
-LOCAL_LLM_MODEL = os.getenv("LOCAL_LLM_MODEL", "google/gemma-2-9b-it")
-
-logger = logging.getLogger("local-gemma-llm")
-
-_FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$", re.IGNORECASE)
-
-
-def _merge_system_into_user(messages: list[dict]) -> list[dict]:
-    """
-    Gemma-2 chat template hard requirements (raises 400 otherwise):
-      - No 'system' role at all.
-      - Must strictly alternate: user, assistant, user, assistant, ...
-      - Must start with 'user'.
-
-     Strategy:
-        1. Remove all system turns from the running chat turns and collect
-            their content as one instruction block.
-        2. Merge consecutive same-role turns.
-        3. Ensure the sequence starts with user.
-        4. Prepend the collected system instruction block to the FIRST user
-            turn only, so dynamic context never pollutes the latest user utterance.
-    """
-    # ── Step 1: strip system turns and collect them separately ───────────
-    out: list[dict] = []
-    system_chunks: list[str] = []
-
-    for msg in messages:
-        role = msg["role"]  # may be str or StrEnum — == comparisons work either way
-        content = str(msg.get("content") or "")
-
-        if role == "system":
-            if content:
-                system_chunks.append(content)
-        elif role == "user":
-            out.append({"role": "user", "content": content})
-        else:  # assistant / model
-            out.append({"role": "assistant", "content": content})
-
-    # ── Step 2: merge consecutive same-role messages ──────────────────────
-    merged: list[dict] = []
-    for msg in out:
-        if merged and merged[-1]["role"] == msg["role"]:
-            merged[-1] = {"role": msg["role"],
-                          "content": merged[-1]["content"] + "\n\n" + msg["content"]}
-        else:
-            merged.append(dict(msg))
-
-    # ── Step 3: ensure conversation starts with 'user' ────────────────────
-    if merged and merged[0]["role"] != "user":
-        merged.insert(0, {"role": "user", "content": "[call started]"})
-
-    # ── Step 4: prepend system instruction block to first user turn ───────
-    if system_chunks:
-        system_text = "\n\n".join(system_chunks).strip()
-        if system_text:
-            for i, msg in enumerate(merged):
-                if msg["role"] == "user":
-                    merged[i] = {
-                        "role": "user",
-                        "content": f"{system_text}\n\n{msg['content']}" if msg["content"] else system_text,
-                    }
-                    break
-            else:
-                merged.insert(0, {"role": "user", "content": system_text})
-
-    return merged
-
-# Phrases that indicate the agent is closing the call. We scan the spoken
-# text (response_text or raw fallback) for any of these and force the
-# hangup signal — this is the intent-based safety net for when the local
-# LLM forgets to set continue_conversation=false in the JSON.
-_END_CALL_PHRASES = (
-    "धन्यवाद",
-    "धन्यबाद",
-    "दिन शुभ हो",
-    "शुभ दिन",
-    "आपका दिन",
-    "अलविदा",
-    "नमस्ते जी",
-    "फ़ीडबैक और समय",
-    "फीडबैक और समय",
-    "बात करूंगी",       # callback rescheduling
-    "बाद में कॉल",
-    "बाद में बात",
-    "फिर कॉल",
-    "फिर बात",
+from livekit.agents.llm import ChatChunk, ChoiceDelta
+from livekit.agents.types import (
+    DEFAULT_API_CONNECT_OPTIONS,
+    NOT_GIVEN,
+    APIConnectOptions,
+    NotGivenOr,
 )
 
+logger = logging.getLogger(__name__)
 
-def _is_closing_intent(text: str) -> bool:
-    if not text:
-        return False
-    lowered = text.strip()
-    return any(phrase in lowered for phrase in _END_CALL_PHRASES)
+_BOS = "<bos>"
+_USER_START = "<start_of_turn>user\n"
+_MODEL_START = "<start_of_turn>model\n"
+_TURN_END = "<end_of_turn>\n"
 
 
-def _parse_llm_response(content: str) -> tuple[str, bool]:
+def _build_gemma_prompt(messages: list[dict]) -> str:
     """
-    Parse an LLM response that should look like:
-        {"response_text": "...", "continue_conversation": true|false}
+    Convert an OpenAI-style messages list to the Gemma 2 raw prompt.
 
-    Returns (response_text, continue_conversation). Falls back to the raw
-    content with continue_conversation=True if parsing fails so a malformed
-    turn never silently hangs up the call.
+    Rules:
+    - 'system' and 'user' roles both map to <start_of_turn>user
+    - Consecutive same-side turns are merged with a newline separator
+    - The prompt ends with an open <start_of_turn>model to elicit the response
     """
-    raw = (content or "").strip()
-    if not raw:
-        return "", True
+    # Normalise roles: system → user
+    normalised: list[tuple[str, str]] = []
+    for msg in messages:
+        role = msg.get("role", "user")
+        content = msg.get("content") or ""
+        if isinstance(content, list):
+            content = "\n".join(
+                b.get("text", "") for b in content if isinstance(b, dict)
+            )
+        content = content.strip()
+        side = "model" if role == "assistant" else "user"
+        normalised.append((side, content))
 
-    # Strip optional ```json ... ``` fences the model may emit.
-    stripped = _FENCE_RE.sub("", raw).strip()
+    # Merge consecutive same-side turns
+    merged: list[tuple[str, str]] = []
+    for side, text in normalised:
+        if merged and merged[-1][0] == side:
+            merged[-1] = (side, merged[-1][1] + "\n" + text)
+        else:
+            merged.append([side, text])
 
-    # Try to find the first JSON object in the string.
-    candidates = [stripped]
-    brace_start = stripped.find("{")
-    brace_end = stripped.rfind("}")
-    if brace_start != -1 and brace_end != -1 and brace_end > brace_start:
-        candidates.append(stripped[brace_start : brace_end + 1])
+    # Build prompt string
+    prompt = _BOS
+    for side, text in merged:
+        turn_start = _MODEL_START if side == "model" else _USER_START
+        prompt += turn_start + text + _TURN_END
 
-    for candidate in candidates:
-        try:
-            obj = json.loads(candidate)
-        except Exception:
-            continue
-        if isinstance(obj, dict) and "response_text" in obj:
-            text = str(obj.get("response_text") or "").strip()
-            cont_val = obj.get("continue_conversation", True)
-            if isinstance(cont_val, str):
-                cont = cont_val.strip().lower() not in ("false", "0", "no")
-            else:
-                cont = bool(cont_val)
-            # Intent-based safety net: even if the model said continue=true,
-            # if the spoken line is clearly a closing one, end the call.
-            if cont and _is_closing_intent(text):
-                logger.info("Closing intent detected in response_text; forcing continue_conversation=false")
-                cont = False
-            return text, cont
-
-    logger.warning("LLM response was not valid JSON; forwarding raw text. Snippet: %s", raw[:200])
-    # Pure intent-based fallback: if JSON parsing failed but the raw text
-    # contains a closing phrase, still hang up cleanly.
-    cont = not _is_closing_intent(raw)
-    if not cont:
-        logger.info("Closing intent detected in raw (non-JSON) response; forcing hangup")
-    return raw, cont
+    # Open the model turn for completion
+    prompt += _MODEL_START
+    return prompt
 
 
-class LocalGemmaLLM(llm.LLM):
+class LocalVLLM(llm.LLM):
+    """
+    LiveKit LLM plugin for an in-house vLLM/Gemma 2 server.
+    Uses the raw /v1/completions endpoint with the native Gemma prompt format.
+    """
+
     def __init__(
         self,
-        base_url: str = LOCAL_LLM_URL,
+        *,
+        base_url: str,
+        model: str,
         temperature: float = 0.1,
-        max_new_tokens: int = 1024,
-    ):
+        max_tokens: int = 512,
+    ) -> None:
+        """
+        Args:
+            base_url:   e.g. http://192.168.30.239:9000/v1
+            model:      e.g. google/gemma-2-9b-it
+            temperature: sampling temperature
+            max_tokens: max tokens to generate per turn
+        """
         super().__init__()
         self._base_url = base_url.rstrip("/")
+        self._completions_url = f"{self._base_url}/completions"
+        self._model = model
         self._temperature = temperature
-        self._max_new_tokens = max_new_tokens
-        # Set by web_rtc_server per-call. Invoked (sync, no args) when the LLM
-        # emits continue_conversation=false. Used to trigger call termination
-        # without depending on tool-calling support in the local model.
-        self.on_end_conversation = None
-        # Set by web_rtc_server per-call. A zero-arg callable that returns
-        # a string to inject as a fresh system message before every LLM
-        # request — used to feed Gemma a live "📋 LIVE SURVEY STATE" slot
-        # checklist so it stops re-asking already-answered questions.
-        self.get_dynamic_context = None
+        self._max_tokens = max_tokens
 
     @property
     def model(self) -> str:
-        return LOCAL_LLM_MODEL
-
-    @property
-    def provider(self) -> str:
-        return "local"
+        return self._model
 
     def chat(
         self,
         *,
         chat_ctx: llm.ChatContext,
-        tools=None,
-        conn_options=DEFAULT_API_CONNECT_OPTIONS,
-        parallel_tool_calls=NOT_GIVEN,
-        tool_choice=NOT_GIVEN,
-        extra_kwargs=NOT_GIVEN,
-    ) -> "LocalGemmaLLMStream":
-        return LocalGemmaLLMStream(
-            self,
+        tools: list[llm.Tool] | None = None,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+        parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
+        tool_choice: NotGivenOr[llm.ToolChoice] = NOT_GIVEN,
+        extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
+    ) -> "_LocalVLLMStream":
+        return _LocalVLLMStream(
+            llm=self,
             chat_ctx=chat_ctx,
             tools=tools or [],
             conn_options=conn_options,
         )
 
 
-class LocalGemmaLLMStream(llm.LLMStream):
+class _LocalVLLMStream(llm.LLMStream):
+
+    def __init__(
+        self,
+        *,
+        llm: LocalVLLM,
+        chat_ctx: llm.ChatContext,
+        tools: list[llm.Tool],
+        conn_options: APIConnectOptions,
+    ) -> None:
+        super().__init__(llm, chat_ctx=chat_ctx, tools=tools, conn_options=conn_options)
+        self._llm_obj = llm
+
     async def _run(self) -> None:
-        messages = []
-        for item in self._chat_ctx.items:
-            if not hasattr(item, "role"):
-                continue
-            text = getattr(item, "text_content", None)
-            if not text:
-                continue
-            role = item.role
-            if role == "developer":
-                role = "system"
-            messages.append({"role": role, "content": text})
+        # Convert LiveKit ChatContext → OpenAI messages → Gemma raw prompt
+        raw_messages, _ = self._chat_ctx.to_provider_format("openai")
+        prompt = _build_gemma_prompt(raw_messages)
 
-        # Inject the live slot tracker as the FINAL system message so it
-        # is the most recent thing the model sees and can never be missed
-        # in a long conversation history.
-        get_ctx = getattr(self._llm, "get_dynamic_context", None)
-        if callable(get_ctx):
-            try:
-                extra = get_ctx()
-                if extra:
-                    messages.append({"role": "system", "content": extra})
-                    logger.info("📋 Injected live slot state into LLM context:\n%s", extra)
-            except Exception as exc:
-                logger.error("get_dynamic_context failed: %s", exc)
+        payload = {
+            "model": self._llm_obj._model,
+            "prompt": prompt,
+            "stream": True,
+            "temperature": self._llm_obj._temperature,
+            "max_tokens": self._llm_obj._max_tokens,
+            # Stop at the next turn boundary so the model doesn't hallucinate a user turn
+            "stop": ["<end_of_turn>", "<start_of_turn>"],
+        }
 
-        # Gemma-2 chat template rejects system role — fold into user turns
-        vllm_messages = _merge_system_into_user(messages)
-        logger.info("📤 vLLM request messages (%d turns): %s",
-                    len(vllm_messages),
-                    [(m["role"], m["content"][:80]) for m in vllm_messages])
+        request_id = str(uuid.uuid4())
+        logger.debug(f"[LocalVLLM] POST {self._llm_obj._completions_url} (id={request_id})")
 
-        async with httpx.AsyncClient() as client:
-            # --- vLLM OpenAI-compatible endpoint ---
-            resp = await client.post(
-                f"{self._llm._base_url}/v1/chat/completions",
-                json={
-                    "model": LOCAL_LLM_MODEL,
-                    "messages": vllm_messages,
-                    "max_tokens": self._llm._max_new_tokens,
-                    "temperature": self._llm._temperature,
-                    "stream": False,
-                },
-                timeout=60.0,
-            )
-            if resp.status_code >= 400:
-                logger.error("vLLM %s body: %s", resp.status_code, resp.text[:500])
-            resp.raise_for_status()
-            content = resp.json()["choices"][0]["message"]["content"]
-
-            # --- Old custom /chat endpoint (plain Python server) ---
-            # resp = await client.post(
-            #     f"{self._llm._base_url}/chat",
-            #     json={
-            #         "messages": messages,
-            #         "max_new_tokens": self._llm._max_new_tokens,
-            #         "temperature": self._llm._temperature,
-            #         "stream": False,
-            #     },
-            #     timeout=60.0,
-            # )
-            # resp.raise_for_status()
-            # content = resp.json().get("content", "")
-
-        logger.info("🤖 LLM raw response: %s", content)
-        response_text, continue_conversation = _parse_llm_response(content)
-        logger.info(
-            "🔊 → TTS: %r | continue_conversation=%s",
-            response_text,
-            continue_conversation,
+        timeout = aiohttp.ClientTimeout(
+            total=self._conn_options.timeout,
+            connect=10,
         )
 
-        self._event_ch.send_nowait(
-            llm.ChatChunk(
-                id="local-gemma",
-                delta=llm.ChoiceDelta(role="assistant", content=response_text),
-            )
-        )
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.post(
+                self._llm_obj._completions_url,
+                json=payload,
+                headers={"Accept": "text/event-stream"},
+            ) as resp:
+                if resp.status != 200:
+                    body = await resp.text()
+                    raise RuntimeError(f"[LocalVLLM] HTTP {resp.status}: {body}")
 
-        if not continue_conversation:
-            cb = getattr(self._llm, "on_end_conversation", None)
-            if cb is not None:
-                try:
-                    cb()
-                except Exception as exc:
-                    logger.error("on_end_conversation callback failed: %s", exc)
+                async for raw_line in resp.content:
+                    line = raw_line.decode("utf-8").strip()
+
+                    if not line:
+                        continue
+                    if line.startswith("data:"):
+                        line = line[5:].strip()
+                    if not line or line == "[DONE]":
+                        continue
+
+                    try:
+                        chunk = json.loads(line)
+                    except json.JSONDecodeError:
+                        logger.warning(f"[LocalVLLM] Non-JSON line: {line!r}")
+                        continue
+
+                    chunk_id = chunk.get("id", request_id)
+                    for choice in chunk.get("choices", []):
+                        # /v1/completions uses "text", not "delta.content"
+                        text: str | None = choice.get("text")
+                        if text:
+                            self._event_ch.send_nowait(
+                                ChatChunk(
+                                    id=chunk_id,
+                                    delta=ChoiceDelta(
+                                        role="assistant",
+                                        content=text,
+                                    ),
+                                )
+                            )
+
+        logger.debug(f"[LocalVLLM] Stream complete (id={request_id})")
