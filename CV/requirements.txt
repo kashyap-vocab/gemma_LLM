@@ -1,0 +1,7 @@
+numpy
+pandas
+opencv-python-headless
+ultralytics
+openai
+paddleocr
+torch   # or specify a torch wheel/version if needed

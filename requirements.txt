@@ -26,7 +26,7 @@ vllm serve Qwen/Qwen2.5-7B   --port 9000   --quantization bitsandbytes   --load-
 # vllm serve mistralai/Mistral-7B-Instruct-v0.3   --port 9000   --quantization bitsandbytes   --load-format bitsandbytes   --max-model-len 4096   --gpu-memory-utilization 0.7   --enable-auto-tool-choice   --tool-call-parser mistral
 
 
-vllm serve google/gemma-2-9b-it --port 9000   --quantization bitsandbytes   --load-format bitsandbytes --gpu-memory-utilization 0.7
+vllm serve google/gemma-2-9b-it --port 9000   --quantization bitsandbytes   --load-format bitsandbytes --gpu-memory-utilization 0.6 --enable-auto-tool-choice   --tool-call-parser pythonic
 
 google/gemma-4-E4B-it
 

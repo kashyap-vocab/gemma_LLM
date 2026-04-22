@@ -1,0 +1,104 @@
+image_file,x1,y1,x2,y2,paddle_raw,paddle_normalized,matching paddle,tflite_raw,tflite_normalized,matching tflite,GT,paddle_latency_ms,tflite_latency_ms
+Grill_Temperature_in_Thermometer-1015846030.jpeg,341.0,626.0,538.0,762.0,79,7.9°C,3,798,7.98°C,3,7.9,410.69,355.53
+Grill_Temperature_in_Thermometer-1042559014.jpeg,442.0,938.0,606.0,1014.0,152,15.2°C,1,152,15.2°C,1,15.2,356.43,354.82
+Grill_Temperature_in_Thermometer-1045771791.jpeg,177.0,438.0,412.0,612.0,F927,9.27°C,0,6,6°C,3,12.6,358.98,242.14
+Grill_Temperature_in_Thermometer-1046487470.jpeg,309.0,336.0,416.0,419.0,4S,4.0°C,0,4,4°C,3,14.5,319.25,245.42
+Grill_Temperature_in_Thermometer-1047259307.jpeg,345.0,251.0,518.0,319.0,13.1,13.1°C,1,13a1,13.0°C,2,13.1,367.76,361.96
+Grill_Temperature_in_Thermometer-1063212771.jpeg,374.0,492.0,527.0,749.0,,nan,0,0,0°C,3,12.7,171.74,245.47
+Grill_Temperature_in_Thermometer-1080551524.jpeg,180.0,435.0,408.0,551.0,978,97.8°C,2,97,97.0°C,1,9.7,364.41,365.41
+Grill_Temperature_in_Thermometer-1081361434.jpeg,334.0,518.0,425.0,566.0,12.72,12.7°C,1,127,12.7°C,1,12.7,361.34,362.43
+Grill_Temperature_in_Thermometer-1111045705.jpeg,422.0,736.0,521.0,786.0,1,Please provide the OCR output you would like me to process.,3,17,17°C,3,1.7/1.1,588.81,284.14
+Grill_Temperature_in_Thermometer-1118931302.jpeg,894.0,452.0,1090.0,532.0,461,46.1°C,3,1461,14.61°C,1,14.6,369.02,401.34
+Grill_Temperature_in_Thermometer-1176432793.jpeg,625.0,300.0,800.0,388.0,73hm,73°C,0,2376,23.76°C,2,23.6,286.26,400.55
+Grill_Temperature_in_Thermometer-1186094681.jpeg,648.0,548.0,762.0,594.0,113,11.3°C,1,13,13°C,3,11.3,356.31,280.99
+Grill_Temperature_in_Thermometer-1198870400.jpeg,,,,,,nan,0,no_box,Please provide the OCR output from the thermometer reading.,0,8.5,169.98,503.2
+Grill_Temperature_in_Thermometer-1198870409.jpeg,728.0,482.0,825.0,510.0,138,13.8°C,1,1380a,13.8°C,0,13.8,357.09,354.88
+Grill_Temperature_in_Thermometer-1225355534.jpeg,655.0,708.0,816.0,1046.0,E,E,0,,nan,0,13.9,170.29,166.39
+Grill_Temperature_in_Thermometer-1225355543.jpeg,577.0,803.0,747.0,1165.0,,nan,0,0,0°C,3,13.9,169.73,242.07
+Grill_Temperature_in_Thermometer-1265916373.jpeg,227.0,514.0,452.0,617.0,1220,12.2°C,1,12,12°C,2,12.2,357.05,278.65
+Grill_Temperature_in_Thermometer-1305865263.jpeg,285.0,391.0,357.0,568.0,,nan,0,64,64°C,0,9.2,167.78,278.88
+Grill_Temperature_in_Thermometer-1312459563.jpeg,444.0,455.0,571.0,514.0,10.5,10.5°C,1,105,10.5°C,1,10.5,355.54,354.32
+Grill_Temperature_in_Thermometer-1321382067.jpeg,403.0,911.0,485.0,1076.0,E,E,0,,nan,0,11.7,168.17,166.7
+Grill_Temperature_in_Thermometer-1423575693.jpeg,242.0,585.0,337.0,740.0,8,8°C,3,6,6°C,3,16.4,243.49,244.13
+Grill_Temperature_in_Thermometer-1426325007.jpeg,417.0,163.0,476.0,207.0,33,33°C,3,139,13.9°C,2,13.3,280.13,355.46
+Grill_Temperature_in_Thermometer-1456909284.jpeg,225.0,377.0,394.0,452.0,15.2,15.2°C,1,1523,15.23°C,1,15.2,358.49,394.78
+Grill_Temperature_in_Thermometer-1501156010.jpeg,466.0,600.0,534.0,626.0,P,P,3,1210,12.1°C,3,12.1,169.8,358.83
+Grill_Temperature_in_Thermometer-1522914945.jpeg,626.0,607.0,703.0,639.0,24,24°C,0,107,10.7°C,3,10.7,281.6,356.9
+Grill_Temperature_in_Thermometer-1559027672.jpeg,326.0,385.0,440.0,428.0,102,10.2°C,1,102a,10.2°C,1,10.2,356.39,355.23
+Grill_Temperature_in_Thermometer-1559027681.jpeg,398.0,578.0,509.0,655.0,L25,25°C,0,1259,12.59°C,2,12.5,281.4,390.92
+Grill_Temperature_in_Thermometer-1569872897.jpeg,871.0,466.0,957.0,499.0,OE,-10°C,3,101,10.1°C,3,10.1,318.95,357.4
+Grill_Temperature_in_Thermometer-157513757.jpeg,401.0,666.0,486.0,725.0,9,9°C,3,89,8.9°C,3,8.9,250.01,318.68
+Grill_Temperature_in_Thermometer-157566921.jpeg,183.0,614.0,465.0,724.0,5.5c,5.5°C,1,5,5°C,3,5.5,318.53,242.69
+Grill_Temperature_in_Thermometer-1580831630.jpeg,488.0,573.0,670.0,645.0,13.1,13.1°C,1,131,131°C,1,13.1,358.06,319.91
+Grill_Temperature_in_Thermometer-1626347275.jpeg,,,,,,nan,0,no_box,Please provide the OCR output from the thermometer reading.,0,10.4,169.85,507.97
+Grill_Temperature_in_Thermometer-1628856948.jpeg,460.0,472.0,586.0,535.0,148,14.8°C,1,148,14.8°C,1,14.8,361.36,364.46
+Grill_Temperature_in_Thermometer-1631202943.jpeg,412.0,777.0,684.0,905.0,1553,15.53°C,1,153,15.3°C,2,15.5,395.76,360.22
+Grill_Temperature_in_Thermometer-1638839173.jpeg,239.0,306.0,322.0,366.0,99,99°C,1,979,9.79°C,2,9.9,286.3,363.55
+Grill_Temperature_in_Thermometer-168382185.jpeg,976.0,469.0,1104.0,547.0,MEEBA,"The OCR output ""MEEBA"" does not resemble a recognizable temperature reading in any standard numeric format. Therefore, I cannot extract a temperature.",3,18,18°C,0,11.8,1210.4,281.37
+Grill_Temperature_in_Thermometer-1697036116.jpeg,232.0,547.0,346.0,611.0,3.6,3.6°C,3,136,136°C,1,13.6,321.57,320.65
+Grill_Temperature_in_Thermometer-1707575212.jpeg,537.0,432.0,754.0,929.0,,nan,0,6,6.0°C,3,13.6,169.92,318.88
+Grill_Temperature_in_Thermometer-1713797328.jpeg,,,,,,nan,0,no_box,Please provide the OCR output from the thermometer reading.,0,no,169.39,505.43
+Grill_Temperature_in_Thermometer-1727539712.jpeg,449.0,639.0,668.0,737.0,8.27,8.27°C,1,824,8.24°C,3,8.2,358.88,354.89
+Grill_Temperature_in_Thermometer-1728874498.jpeg,308.0,651.0,444.0,707.0,73.6,37.6°C,0,136,13.6°C,1,13.6,355.7,353.53
+Grill_Temperature_in_Thermometer-1730552178.jpeg,299.0,613.0,491.0,719.0,BALEN,"The provided OCR output ""BALEN"" does not appear to represent a valid temperature reading. It contains letters rather than numerical digits, making it impossible to extract a temperature value.",3,1,Please provide the OCR output from the thermometer reading so I can extract the temperature.,0,11.1,1430.43,726.12
+Grill_Temperature_in_Thermometer-1733630701.jpeg,,,,,,nan,0,no_box,Please provide the OCR output from the thermometer reading.,0,6.6,169.91,504.24
+Grill_Temperature_in_Thermometer-1779221341.jpeg,315.0,520.0,550.0,620.0,3,3°C,0,1310,13.1°C,2,13,243.25,368.08
+Grill_Temperature_in_Thermometer-1785089168.jpeg,641.0,654.0,1008.0,768.0,7.0.8.8,7.08°C,0,708,7.08°C,3,not able to detect,361.71,359.17
+Grill_Temperature_in_Thermometer-184604934.jpeg,365.0,768.0,489.0,818.0,16.3d,16.3°C,1,163,16.3°C,1,16.3,364.74,358.44
+Grill_Temperature_in_Thermometer-184604944.jpeg,334.0,655.0,469.0,730.0,5.34,5.34°C,0,153,15.3°C,1,15.3,364.15,367.11
+Grill_Temperature_in_Thermometer-1847751434.jpeg,509.0,678.0,598.0,715.0,47,47°C,0,104,10.4°C,3,10.4,285.26,360.77
+Grill_Temperature_in_Thermometer-1855379851.jpeg,399.0,512.0,647.0,625.0,13.6,13.6°C,0,13a1,13.0°C,2,13.1,362.95,358.57
+Grill_Temperature_in_Thermometer-1881576517.jpeg,244.0,412.0,386.0,489.0,448A,44.8°C,0,1481,14.8°C,2,14.8,360.86,360.4
+Grill_Temperature_in_Thermometer-1919095469.jpeg,,,,,,nan,0,no_box,Please provide the OCR output from the thermometer reading.,0,15.3,170.48,511.94
+Grill_Temperature_in_Thermometer-1926736126.jpeg,591.0,312.0,841.0,420.0,14.9,14.9°C,1,14a9,14.9°C,1,14.9,357.41,356.45
+Grill_Temperature_in_Thermometer-1926887281.jpeg,615.0,485.0,1012.0,771.0,28,28°C,3,28,28°C,1,28,279.51,281.17
+Grill_Temperature_in_Thermometer-1991848588.jpeg,341.0,500.0,532.0,594.0,OH9T,"The OCR output ""OH9T"" does not resemble a recognizable temperature reading within the specified range (-10°C to 50°C) or format. Therefore, I cannot extract a temperature.",3,7498,74.9°C,3,14.5/14.9,1706.7,357.99
+Grill_Temperature_in_Thermometer-1994562857.jpeg,657.0,454.0,945.0,588.0,9.9,9.9°C,3,9a9,9.9°C,3,9.9,322.67,322.26
+Grill_Temperature_in_Thermometer-2079027634.jpeg,,,,,,nan,0,no_box,Please provide the OCR output from the thermometer reading.,0,11.6,171.03,508.67
+Grill_Temperature_in_Thermometer-209100953.jpeg,305.0,612.0,416.0,667.0,119a,11.9°C,1,19,19°C,3,11.9,357.94,281.45
+Grill_Temperature_in_Thermometer-2101666319.jpeg,113.0,444.0,332.0,529.0,10.2,10.2°C,1,102,10.2°C,3,10.2,359.18,356.22
+Grill_Temperature_in_Thermometer-2164752595.jpeg,119.0,380.0,279.0,451.0,15.5,15.5°C,1,15a5,15.5°C,2,15.5,356.96,355.24
+Grill_Temperature_in_Thermometer-2191810694.jpeg,227.0,432.0,404.0,534.0,79,7.9°C,0,1903,19.03°C,1,19,318.09,390.72
+Grill_Temperature_in_Thermometer-2225995112.jpeg,506.0,543.0,605.0,592.0,142,14.2°C,1,142a,14.2°C,1,14.2,358.24,356.09
+Grill_Temperature_in_Thermometer-2229875101.jpeg,225.0,450.0,358.0,508.0,118,11.8°C,1,1a8,18.0°C,3,11.8,359.33,356.7
+Grill_Temperature_in_Thermometer-2237203479.jpeg,,,,,,nan,0,no_box,The OCR output is missing. Please provide the OCR output so I can extract the temperature.,0,7.3,168.81,798.44
+Grill_Temperature_in_Thermometer-2294370676.jpeg,363.0,461.0,546.0,543.0,17.8,17.8°C,0,18,18°C,0,11.8,354.75,279.74
+Grill_Temperature_in_Thermometer-2298283131.jpeg,,,,,,nan,0,no_box,Please provide the OCR output from the thermometer reading.,0,12.2,169.02,511.21
+Grill_Temperature_in_Thermometer-23245655.jpeg,1150.0,646.0,1240.0,685.0,PLE50,5.0°C,0,1,Please provide the OCR output from the thermometer reading.,3,not visible,325.96,501.88
+Grill_Temperature_in_Thermometer-2373485885.jpeg,366.0,739.0,500.0,806.0,1450,14.5°C,1,145,14.5°C,1,14.5,358.01,356.8
+Grill_Temperature_in_Thermometer-2373485910.jpeg,478.0,843.0,633.0,929.0,125t,12.5°C,1,1257,12.57°C,2,12.5,355.4,391.64
+Grill_Temperature_in_Thermometer-2373485941.jpeg,305.0,790.0,432.0,861.0,144c,14.4°C,1,14a4,14.4°C,2,14.4,355.25,356.54
+Grill_Temperature_in_Thermometer-2375247346.jpeg,280.0,488.0,517.0,582.0,10.5,10.5°C,1,105,10.5°C,1,10.5,357.18,362.02
+Grill_Temperature_in_Thermometer-2377763380.jpeg,323.0,504.0,475.0,573.0,16.6,16.6°C,2,161,16.1°C,1,16.1,356.57,355.32
+Grill_Temperature_in_Thermometer-2399321212.jpeg,581.0,563.0,707.0,617.0,E6,-6°C,3,6,6.0°C,0,not visible,281.11,317.06
+Grill_Temperature_in_Thermometer-2435854722.jpeg,371.0,649.0,684.0,804.0,7480,74.8°C,3,148,14.8°C,1,14.8,357.45,355.03
+Grill_Temperature_in_Thermometer-250958323.jpeg,250.0,400.0,459.0,499.0,16.6,16.6°C,1,16,16°C,2,16.6,355.69,278.93
+Grill_Temperature_in_Thermometer-2526595888.jpeg,218.0,418.0,377.0,484.0,16.3,16.3°C,1,16a3,16.3°C,2,16.3,357.4,355.98
+Grill_Temperature_in_Thermometer-2529988822.jpeg,535.0,337.0,608.0,367.0,109,10.9°C,1,109,10.9°C,1,10.9,359.19,359.14
+Grill_Temperature_in_Thermometer-2628961652.jpeg,,,,,,nan,0,no_box,Please provide the OCR output from the thermometer reading.,0,9.2,169.88,524.14
+Grill_Temperature_in_Thermometer-2721474524.jpeg,488.0,418.0,565.0,465.0,103,10.3°C,1,103,10.3°C,1,10.3,359.11,356.3
+Grill_Temperature_in_Thermometer-2731979751.jpeg,344.0,580.0,461.0,627.0,14.4,14.4°C,1,014a4,14.4°C,0,14.4,357.75,358.53
+Grill_Temperature_in_Thermometer-2782664357.jpeg,407.0,789.0,621.0,877.0,14.1E,14.1°C,1,141,14.1°C,1,14.1,357.47,358.85
+Grill_Temperature_in_Thermometer-2792022073.jpeg,288.0,497.0,398.0,557.0,MA,I need an image or text input containing a thermometer reading to perform the extraction. Please provide the OCR output or image.,3,101,10.1°C,3,10.1,1038.65,355.04
+Grill_Temperature_in_Thermometer-2799115904.jpeg,250.0,424.0,376.0,483.0,44,44°C,3,14,14.0°C,3,14.4,282.13,352.54
+Grill_Temperature_in_Thermometer-2817350914.jpeg,,,,,,nan,0,no_box,Please provide the OCR output from the thermometer reading.,0,9.4,168.32,500.03
+Grill_Temperature_in_Thermometer-2823002958.jpeg,370.0,277.0,578.0,404.0,9.6,9.6°C,1,96,96.0°C,3,9.6,321.94,354.31
+Grill_Temperature_in_Thermometer-2837552235.jpeg,362.0,300.0,627.0,414.0,P1440,14.4°C,3,14,14°C,2,14.4,356.68,281.72
+Grill_Temperature_in_Thermometer-2909116386.jpeg,379.0,437.0,433.0,459.0,143,14.3°C,1,143,14.3°C,1,14.3,359.96,357.8
+Grill_Temperature_in_Thermometer-2909116396.jpeg,381.0,567.0,452.0,609.0,4.6,4.6°C,0,1468,14.68°C,1,14.6,327.46,407.21
+Grill_Temperature_in_Thermometer-3006032451.jpeg,390.0,819.0,507.0,865.0,92,92.0°C,3,92,92.0°C,3,9.2,362.09,362.58
+Grill_Temperature_in_Thermometer-3046211434.jpeg,160.0,707.0,245.0,756.0,93,93°C,3,939,9.39°C,3,9.3,287.26,359.77
+Grill_Temperature_in_Thermometer-3061225424.jpeg,658.0,614.0,795.0,675.0,1152,11.52°C,3,01a5,1.5°C,3,11.5,403.83,323.83
+Grill_Temperature_in_Thermometer-3061470274.jpeg,293.0,647.0,463.0,735.0,143,14.3°C,1,1430,14.3°C,1,14.3,363.12,363.27
+Grill_Temperature_in_Thermometer-3089187760.jpeg,329.0,325.0,487.0,388.0,16.3c,16.3°C,1,16a3,16.3°C,2,16.3,359.31,363.67
+Grill_Temperature_in_Thermometer-3159954731.jpeg,439.0,815.0,566.0,862.0,9.9,9.9°C,3,19,19°C,3,9.9,320.78,281.28
+Grill_Temperature_in_Thermometer-317346614.jpeg,392.0,568.0,494.0,620.0,378,37.8°C,0,1379,13.79°C,1,13.7,355.84,393.83
+Grill_Temperature_in_Thermometer-3191939103.jpeg,349.0,570.0,561.0,644.0,8.1,8.1°C,1,81,81°C,1,8.1,320.96,281.01
+Grill_Temperature_in_Thermometer-3213684090.jpeg,460.0,607.0,588.0,663.0,1283,12.83°C,1,128,12.8°C,1,12.8,395.38,355.37
+Grill_Temperature_in_Thermometer-3225804030.jpeg,401.0,576.0,489.0,610.0,115A,11.5°C,1,15,15°C,0,11.5,357.68,279.49
+Grill_Temperature_in_Thermometer-3301097744.jpeg,,,,,,nan,0,no_box,Please provide the OCR output from the thermometer reading.,0,12.3,170.08,504.42
+Grill_Temperature_in_Thermometer-3375468705.jpeg,,,,,,nan,0,no_box,Please provide the OCR output.,0,not visible,175.22,366.37
+Grill_Temperature_in_Thermometer-3377359096.jpeg,,,,,,nan,0,no_box,Please provide the OCR output from the thermometer reading.,0,not visible,171.4,508.63
+,,,,,,nan,,,nan,,,170.95,172.53
+,,,,,,nan,,,nan,,,172.83,168.49
+,,,,,,nan,39/100,,nan,30/100,,172.86,170.44
